@@ -385,7 +385,7 @@
         <span class="mi c6">⚙️</span>设置<span class="mv" id="sd-short"></span><span class="arw">›</span>
       </button>
       <button class="mrow" onclick="subView('about')">
-        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.33</span><span class="arw">›</span>
+        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.34</span><span class="arw">›</span>
       </button>
     </div>
   </section>
@@ -398,7 +398,7 @@
     </div>
     <div class="card" style="font-size:12.5px;color:var(--soft);line-height:2">
       <b style="color:var(--text)">视频下载器</b> · 个人自用 · 完全离线<br>
-      网页 v2.33 · App 壳 v1.34（code 35）<br>
+      网页 v2.34 · App 壳 v1.35（code 36）<br>
       解析 / 下载 / 转码全部在本机完成，无服务器、不上传任何数据
     </div>
     <div class="card" style="margin-top:12px">
@@ -406,7 +406,8 @@
       <div class="chips">
         <span class="chip">B站</span><span class="chip">抖音</span><span class="chip">微博</span>
         <span class="chip">小红书</span><span class="chip">西瓜视频</span><span class="chip">磁力链接</span>
-        <span class="chip">小黑盒</span><span class="chip">森空岛</span>
+        <span class="chip">小黑盒</span><span class="chip">森空岛</span><span class="chip">米游社</span>
+        <span class="chip">库街区</span><span class="chip">TapTap</span>
         <span class="chip">主页/合集批量</span><span class="chip">上千站点</span>
       </div>
     </div>
@@ -2480,13 +2481,15 @@ function fillFromClipbar() {
 }
 // ---------- App 内采集：图集/图文链接不走 yt-dlp（它只认视频，图集会报错或误判成单个视频），
 // 用 App 自带浏览器打开页面，采集全部图片/视频直链后在手机上原样下载 ----------
-// ① 提交时预路由：URL 一看就知道 yt-dlp 不认的（抖音 note / 微信图文 / 小黑盒 / 森空岛等
-//    没有提取器的社区）直接走 App 内采集，不先撞一次 yt-dlp 报错
+// ① 提交时预路由：URL 一看就知道 yt-dlp 不认的（抖音 note / 微信图文 / 游戏厂商社区等
+//    没有提取器的站点）直接走 App 内采集，不先撞一次 yt-dlp 报错
 function galleryKindOf(link) {
   if (/douyin\.com\/note\/\d+/i.test(link)) return { kind: 'note', label: '抖音图集' };
   if (/mp\.weixin\.qq\.com/i.test(link)) return { kind: 'wx', label: '微信图文' };
   if (/xiaoheihe\.cn|heybox|maxjia/i.test(link)) return { kind: 'any', label: '小黑盒' };
   if (/skland\.com/i.test(link)) return { kind: 'any', label: '森空岛' };
+  if (/miyoushe\.com|mihoyo\.com|hoyolab\.com/i.test(link)) return { kind: 'any', label: '米游社' };
+  if (/kurobbs\.com|kurogame\.com/i.test(link)) return { kind: 'any', label: '库街区' };
   return null;
 }
 // ② 解析失败时自动转采集用的 kind（小红书图文失败是常态；抖音短链展开成 note 后必失败）
@@ -2496,8 +2499,11 @@ function fallbackKindOf(url, err) {
   if (/douyin/i.test(url)) return 'note';
   if (/xiaoheihe|heybox|maxjia/i.test(url)) return 'any';
   if (/skland/i.test(url)) return 'any';
+  if (/miyoushe|mihoyo|hoyolab/i.test(url)) return 'any';
+  if (/kurobbs|kurogame/i.test(url)) return 'any';
+  if (/taptap|coolapk|pipix|3839|tieba\.baidu|nga\.cn|nga\.178/i.test(url)) return 'any';
   if (/weibo/i.test(url) && /Unsupported|no video|无视频|generic/i.test(err || '')) return 'generic';
-  // 其余任意站点：报"不支持/没有视频"类错误就试一次网页采集（og:video/内嵌直链兜底）
+  // 其余任意站点：报"不支持/没有视频"类错误就试一次网页采集（og:video/内嵌直链/网络记录兜底）
   if (/Unsupported|no video|无视频|not supported|Unable to extract|no video formats|ERR/i.test(err || '')) return 'any';
   return null;
 }

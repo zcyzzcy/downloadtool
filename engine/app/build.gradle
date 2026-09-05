@@ -11,8 +11,8 @@ android {
         applicationId "com.palworld.vd"
         minSdk 24
         targetSdk 34
-        versionCode 33
-        versionName "1.32"
+        versionCode 34
+        versionName "1.33"
         // 只保留 arm64：近 8 年的手机全是 64 位，省掉整份 32 位引擎约 47MB
         ndk { abiFilters 'arm64-v8a' }
     }
@@ -40,6 +40,9 @@ dependencies {
     implementation 'io.github.junkfood02.youtubedl-android:library:0.18.0'
     implementation 'io.github.junkfood02.youtubedl-android:ffmpeg:0.18.0'
     implementation 'io.github.junkfood02.youtubedl-android:aria2c:0.18.0'
+    // 播放器内核：Media3 ExoPlayer（B站等主流播放器同源方案）。MediaPlayer 在部分 ROM 上
+    // 会误报"解码失败"、seek 不精准、不支持 mkv/ts——ExoPlayer 一次解决这三个问题
+    implementation 'androidx.media3:media3-exoplayer:1.4.1'
     // FileProvider：下载的文件授权给系统播放器打开
     implementation 'androidx.core:core:1.13.1'
     // androidx.core 的 kotlin-stdlib 1.8 与库里的 stdlib-jdk7/8 1.7 撞类：

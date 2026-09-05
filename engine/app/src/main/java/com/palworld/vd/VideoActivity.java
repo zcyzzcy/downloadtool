@@ -10,22 +10,27 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.SurfaceTexture;
 import android.graphics.drawable.GradientDrawable;
-import android.media.AudioAttributes;
 import android.media.AudioManager;
-import android.media.MediaPlayer;
-import android.media.PlaybackParams;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.GestureDetector;
 import android.view.Gravity;
 import android.view.MotionEvent;
-import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+
+import androidx.media3.common.AudioAttributes;
+import androidx.media3.common.C;
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.PlaybackException;
+import androidx.media3.common.Player;
+import androidx.media3.common.VideoSize;
+import androidx.media3.exoplayer.ExoPlayer;
 
 import org.json.JSONObject;
 
@@ -33,12 +38,13 @@ import java.io.File;
 import java.util.Locale;
 
 /**
- * 原生视频播放页（v2 重构）：MediaPlayer + TextureView，系统解码器——图库能放的它都能放
- * （WebView 的 video 解不了 H.265 等编码，表现为有声无画黑屏）。
- * 视觉对齐主流播放器：自绘细进度条（圆角端点/缓冲段/拖拽气泡）、上下栏滑入滑出、
- * 双击两侧快退快进带快闪提示、中央大播放键、玻璃质感药丸按钮。
- * 手势对齐 B站：单击显隐控件、双击两侧±10s、双击中央播放暂停、横拖快进、
- * 左半竖拖亮度、右半竖拖音量、长按 2 倍速；进度与倍速跨视频记忆。
+ * 原生视频播放页 v3：内核换成 Media3 ExoPlayer（B站等主流播放器的同源方案）。
+ * ① 之前 MediaPlayer 在部分 ROM 上会误报"解码失败"（文件本身没问题）——ExoPlayer 的
+ *    渲染器选择 + 失败自动重试一次，把误报压到最低；
+ * ② seek 精准即时（之前 MediaPlayer 拖动会跳回开头/落点漂移）；
+ * ③ mkv/ts/flv 容器直接支持。
+ * 自绘 HUD（进度条气泡/上下栏滑入滑出/中央播放键）与 B站式手势全部保留；
+ * 双击快进快退按需求移除——双击=播放/暂停；右上角 ⋮ 菜单：倍速/画面/旋转/循环/外部打开。
  */
 public class VideoActivity extends Activity {
 
@@ -46,13 +52,12 @@ public class VideoActivity extends Activity {
     private int idx = 0;
     private String title = "";
 
+    private ExoPlayer player;
     private TextureView tex;
-    private MediaPlayer mp;
-    private Surface surf;
 
     private FrameLayout root;
     private LinearLayout topBar, botBar;
-    private TextView titleV, curT, durT, cueV, playIco, spdBtn, fillBtn, prevB, nextB, cntV, centerPlay, flashV, spd2x;
+    private TextView titleV, curT, durT, cueV, playIco, spdBtn, fillBtn, prevB, nextB, cntV, centerPlay, spd2x, moreBtn;
     private PBar pbar;
 
     private final Handler h = new Handler(Looper.getMainLooper());
@@ -60,9 +65,13 @@ public class VideoActivity extends Activity {
     private AudioManager am;
     private float speed = 1f;
     private boolean fillMode = false;   // false=适配（完整画面留黑边，默认） true=铺满（裁切边缘）
+    private boolean loop = false;       // 单集循环
     private int vw = 0, vh = 0;
     private boolean sizedOnce = false;
     private int lastSaveMs = 0;
+    private long pendingResumeMs = 0;   // 等 READY 后要跳到的续播位置
+    private boolean retried = false;    // 本集是否已自动重试过一次（偶发解码误报的兜底）
+    private long lastKnownPos = 0;      // 最近一次已知播放位置（重试/手势的基准，避免 0 值把进度拉回头）
 
     // 手势状态
     private String gmode = null;         // seek | bright | vol（null=未锁定方向）
@@ -81,6 +90,7 @@ public class VideoActivity extends Activity {
         try { speed = Float.parseFloat(prefs.getString("vd_speed_n", "1")); } catch (Exception e) { speed = 1f; }
         if (speed <= 0 || speed > 4) speed = 1f;
         fillMode = "1".equals(prefs.getString("vd_fill_n", "0"));
+        loop = "1".equals(prefs.getString("vd_loop_n", "0"));
 
         files = getIntent().getStringArrayExtra("files");
         idx = getIntent().getIntExtra("index", 0);
@@ -88,20 +98,95 @@ public class VideoActivity extends Activity {
         if (files == null || files.length == 0) { finish(); return; }
         if (idx < 0 || idx >= files.length) idx = 0;
 
+        buildPlayer();
         buildUi();
         immersive();
         bindGestures();
         play(idx);
     }
 
+    @Override protected void onDestroy() {
+        super.onDestroy();
+        h.removeCallbacksAndMessages(null);
+        saveProg();
+        if (player != null) { try { player.release(); } catch (Exception ignored) {} player = null; }
+        try {
+            android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
+            lp.screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+            getWindow().setAttributes(lp);
+        } catch (Exception ignored) {}
+    }
+
     // ================= 播放控制 =================
+
+    private void buildPlayer() {
+        player = new ExoPlayer.Builder(this).build();
+        // 音频焦点由 ExoPlayer 自己管（打断/恢复），不再手写监听
+        player.setAudioAttributes(new AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true);
+        player.setRepeatMode(loop ? Player.REPEAT_MODE_ONE : Player.REPEAT_MODE_OFF);
+        player.addListener(new Player.Listener() {
+            @Override public void onVideoSizeChanged(VideoSize vs) {
+                if (vs.width > 0 && vs.height > 0) { vw = vs.width; vh = vs.height; fitVideo(); }
+                if (!sizedOnce && vs.width > 0) {   // 初始方向跟随视频画幅
+                    sizedOnce = true;
+                    setRequestedOrientation(vw >= vh
+                        ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                        : ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT);
+                }
+            }
+
+            @Override public void onPlaybackStateChanged(int state) {
+                if (state == Player.STATE_READY) {
+                    cueHide();
+                    long dur = durMs();
+                    durT.setText(dur > 0 ? fmt(dur) : "--:--");
+                    if (pendingResumeMs > 5000 && dur > 0 && pendingResumeMs < dur - 5000) {
+                        player.seekTo(pendingResumeMs);
+                        cue("从上次看过的地方继续 · " + fmt(pendingResumeMs));
+                    }
+                    pendingResumeMs = 0;
+                    showHud();
+                    h.removeCallbacks(tick);
+                    h.post(tick);
+                } else if (state == Player.STATE_BUFFERING) {
+                    cue("加载中…", 0);
+                } else if (state == Player.STATE_ENDED) {
+                    clearProg();
+                    if (idx < files.length - 1) play(idx + 1);   // 连播：图集/多视频任务
+                    else { setPlayIco(); showHud(); }
+                }
+            }
+
+            @Override public void onIsPlayingChanged(boolean isPlaying) {
+                setPlayIco();
+                if (isPlaying) { h.removeCallbacks(tick); h.post(tick); }
+            }
+
+            /** 失败先静默重试一次（部分 ROM 偶发解码初始化失败，第二次就能播——"明明能播放却报错"的兜底）；
+             *  重试仍失败才弹"播放不了"并给出系统播放器出路 */
+            @Override public void onPlayerError(PlaybackException e) {
+                if (!retried) {
+                    retried = true;
+                    long pos = lastKnownPos;
+                    cue("重试中…", 0);
+                    player.setMediaItem(MediaItem.fromUri(Uri.fromFile(new File(files[idx]))), pos);
+                    player.prepare();
+                    player.play();
+                    return;
+                }
+                fail(e.getErrorCodeName());
+            }
+        });
+    }
 
     private void play(int i) {
         saveProg();
-        releaseMp();
         h.removeCallbacks(tick);
         sizedOnce = false;
         idx = i;
+        retried = false;
+        lastKnownPos = 0;
         String name = new File(files[i]).getName();
         String disp = (title != null && title.length() > 0 && files.length == 1)
             ? title : name.replaceAll("\\.[^.]+$", "");
@@ -115,93 +200,25 @@ public class VideoActivity extends Activity {
         curT.setText("0:00");
         durT.setText("--:--");
         applySpeedLabel();
-        try {
-            mp = new MediaPlayer();
-            mp.setAudioAttributes(new AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE).build());
-            mp.setDataSource(files[i]);
-            if (surf != null && surf.isValid()) mp.setSurface(surf);
-            mp.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
-                @Override public void onPrepared(MediaPlayer p) {
-                    cueHide();
-                    durT.setText(fmt(p.getDuration()));
-                    int t = progMap().optInt(baseName(files[idx]), 0) * 1000;
-                    if (t > 5000 && t < p.getDuration() - 5000) {
-                        p.seekTo(t);
-                        cue("从上次看过的地方继续 · " + fmt(t));
-                    }
-                    if (speed != 1f) { try { p.setPlaybackParams(new PlaybackParams().setSpeed(speed)); } catch (Exception ignored) {} }
-                    p.start();
-                    setPlayIco();
-                    showHud();
-                    h.removeCallbacks(tick);
-                    h.post(tick);
-                }
-            });
-            mp.setOnVideoSizeChangedListener(new MediaPlayer.OnVideoSizeChangedListener() {
-                @Override public void onVideoSizeChanged(MediaPlayer p, int w, int hh) {
-                    if (w > 0 && hh > 0) { vw = w; vh = hh; fitVideo(); }
-                    if (!sizedOnce && w > 0) {   // 初始方向跟随视频画幅（横屏视频横着放、竖屏视频竖着放）
-                        sizedOnce = true;
-                        setRequestedOrientation(w >= hh
-                            ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                            : ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT);
-                    }
-                }
-            });
-            mp.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
-                @Override public void onCompletion(MediaPlayer p) {
-                    clearProg();
-                    if (idx < files.length - 1) play(idx + 1);   // 连播：图集/多视频任务
-                    else { setPlayIco(); showHud(); }
-                }
-            });
-            mp.setOnErrorListener(new MediaPlayer.OnErrorListener() {
-                @Override public boolean onError(MediaPlayer p, int what, int extra) { fail(); return true; }
-            });
-            mp.setOnInfoListener(new MediaPlayer.OnInfoListener() {
-                @Override public boolean onInfo(MediaPlayer p, int what, int extra) {
-                    if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) cue("缓冲中…", 0);
-                    else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) cueHide();
-                    return false;
-                }
-            });
-            mp.setOnBufferingUpdateListener(new MediaPlayer.OnBufferingUpdateListener() {
-                @Override public void onBufferingUpdate(MediaPlayer p, int percent) { pbar.setBuf(percent / 100f); }
-            });
-            mp.prepareAsync();
-            cue("加载中…", 0);
-            try { am.requestAudioFocus(afL, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN); } catch (Exception ignored) {}
-        } catch (Exception e) {
-            fail();
-        }
-    }
-
-    private void releaseMp() {
-        if (mp != null) {
-            try { mp.stop(); } catch (Exception ignored) {}
-            try { mp.release(); } catch (Exception ignored) {}
-            mp = null;
-        }
+        pendingResumeMs = progMap().optInt(baseName(files[idx]), 0) * 1000L;
+        player.setMediaItem(MediaItem.fromUri(Uri.fromFile(new File(files[i]))), 0);
+        if (speed != 1f) player.setPlaybackSpeed(speed);
+        player.prepare();
+        player.play();
+        cue("加载中…", 0);
     }
 
     private void togglePlay() {
-        if (mp == null) return;
-        try {
-            if (mp.isPlaying()) mp.pause(); else mp.start();
-            setPlayIco();
-            showHud();
-        } catch (Exception ignored) {}
+        if (player == null) return;
+        if (player.getPlayWhenReady()) player.pause();
+        else player.play();
     }
 
     private void skip(int ms) {
-        if (mp == null) return;
-        try {
-            int t = Math.max(0, Math.min(mp.getDuration() - 200, mp.getCurrentPosition() + ms));
-            mp.seekTo(t);
-            cue((ms > 0 ? "10秒 »" : "« 10秒") + "  " + fmt(t));
-        } catch (Exception ignored) {}
+        if (player == null) return;
+        long dur = durMs();
+        if (dur <= 0) return;
+        player.seekTo(Math.max(0, Math.min(dur - 200, player.getCurrentPosition() + ms)));
     }
 
     private void step(int d) {
@@ -209,7 +226,9 @@ public class VideoActivity extends Activity {
         play((idx + d + files.length) % files.length);
     }
 
-    /** 倍速列表选择（比循环点击直观：一屏看全所有档位，当前档打勾） */
+    // ================= 倍速 / 画面 / 菜单 =================
+
+    /** 倍速列表选择（一屏看全所有档位，当前档打勾） */
     private void showSpeedMenu() {
         final float[] opts = {3f, 2f, 1.5f, 1.25f, 1f, 0.75f, 0.5f};
         String[] labels = new String[opts.length];
@@ -234,15 +253,41 @@ public class VideoActivity extends Activity {
             .show();
     }
 
-    private float cur() {
-        try { if (mp != null && !holding2x) { float r = mp.getPlaybackParams().getSpeed(); if (r > 0) return r; } } catch (Exception ignored) {}
-        return speed;
+    /** 右上角 ⋮ 更多菜单（B站式）：倍速/画面/旋转/循环/外部打开 */
+    private void showMoreMenu() {
+        final String[] items = {
+            "播放倍速 · " + trimF(speed) + "x",
+            fillMode ? "画面 · 铺满（点切适配）" : "画面 · 适配（点切铺满）",
+            "旋转屏幕",
+            (loop ? "✓ " : "") + "单集循环",
+            "用其他应用打开",
+        };
+        new AlertDialog.Builder(this)
+            .setItems(items, new android.content.DialogInterface.OnClickListener() {
+                @Override public void onClick(android.content.DialogInterface d, int w) {
+                    switch (w) {
+                        case 0: showSpeedMenu(); break;
+                        case 1: toggleFill(); break;
+                        case 2: toggleRotate(); break;
+                        case 3: toggleLoop(); break;
+                        case 4: openExternal(); break;
+                    }
+                }
+            })
+            .setNegativeButton("取消", null)
+            .show();
+    }
+
+    private void toggleLoop() {
+        loop = !loop;
+        prefs.edit().putString("vd_loop_n", loop ? "1" : "0").apply();
+        player.setRepeatMode(loop ? Player.REPEAT_MODE_ONE : Player.REPEAT_MODE_OFF);
+        cue(loop ? "单集循环：开" : "单集循环：关");
+        showHud();
     }
 
     private void applySpeed() {
-        boolean wasPaused = mp != null && !mp.isPlaying();
-        try { if (mp != null) mp.setPlaybackParams(new PlaybackParams().setSpeed(speed)); } catch (Exception ignored) {}
-        if (wasPaused && mp != null) { try { mp.pause(); } catch (Exception ignored) {} }
+        try { player.setPlaybackSpeed(speed); } catch (Exception ignored) {}
         applySpeedLabel();
     }
 
@@ -251,7 +296,7 @@ public class VideoActivity extends Activity {
     private void toggleFill() {
         fillMode = !fillMode;
         prefs.edit().putString("vd_fill_n", fillMode ? "1" : "0").apply();
-        fillBtn.setText(fillMode ? "铺满" : "适配");   // 按钮显示当前模式（此前只在进播放器时设置一次，切完不刷新）
+        fillBtn.setText(fillMode ? "铺满" : "适配");
         fitVideo();
         cue(fillMode ? "铺满（可能裁切边缘）" : "适配（完整画面）");
         showHud();
@@ -266,7 +311,7 @@ public class VideoActivity extends Activity {
     }
 
     private void setPlayIco() {
-        boolean playing = mp != null && mp.isPlaying();
+        boolean playing = player != null && player.isPlaying();
         playIco.setText(playing ? "⏸" : "▶");
         centerPlay.setText(playing ? "" : "▶");
         if (playing) { centerPlay.setVisibility(View.GONE); return; }
@@ -285,8 +330,7 @@ public class VideoActivity extends Activity {
         } catch (Exception ignored) {}
     }
 
-    /** 画面适配：直接改 TextureView 的布局尺寸（居中、黑边在根容器上）——比矩阵变换直观可靠。
-     *  适配=完整画面（默认）；铺满=放大裁切铺满屏幕 */
+    /** 画面适配：直接改 TextureView 的布局尺寸（居中、黑边在根容器上） */
     private void fitVideo() {
         if (vw <= 0 || vh <= 0 || tex == null) return;
         int cw = root.getWidth(), ch = root.getHeight();
@@ -303,6 +347,21 @@ public class VideoActivity extends Activity {
         }
     }
 
+    private long durMs() {
+        try {
+            long d = player.getDuration();
+            return (d == C.TIME_UNSET || d <= 0) ? 0 : d;
+        } catch (Exception e) { return 0; }
+    }
+
+    private long safePos() {
+        try {
+            long p = player.getCurrentPosition();
+            if (p >= 0) return p;
+        } catch (Exception ignored) {}
+        return lastKnownPos;   // 播放器短暂取不到位置时用最近已知值，绝不让进度手势从头算起
+    }
+
     // ================= 进度记忆（与网页端共用 kv_vd_progress，按文件名记） =================
 
     private JSONObject progMap() {
@@ -310,9 +369,9 @@ public class VideoActivity extends Activity {
     }
 
     private void saveProg() {
-        if (mp == null || files == null) return;
+        if (player == null || files == null) return;
         try {
-            int pos = mp.getCurrentPosition(), dur = mp.getDuration();
+            long pos = player.getCurrentPosition(), dur = durMs();
             JSONObject m = progMap();
             String k = baseName(files[idx]);
             if (dur > 0 && pos > 5000 && pos < dur - 5000) m.put(k, pos / 1000);
@@ -335,10 +394,7 @@ public class VideoActivity extends Activity {
 
     private int dp(float v) { return Math.round(v * getResources().getDisplayMetrics().density); }
 
-    /**
-     * 自绘进度条（主流播放器样式）：3.5dp 圆角细轨道 + 缓冲段 + 白色进度，
-     * 平时只有一个小圆点，按住/拖拽时圆点放大并弹出时间气泡（跟着手指走）。
-     */
+    /** 自绘进度条：圆角细轨道 + 缓冲段 + 白色进度，按住/拖拽时圆点放大并弹出时间气泡（跟手） */
     private class PBar extends View {
         private float frac = 0, buf = 0;
         private boolean scrub = false;
@@ -368,7 +424,7 @@ public class VideoActivity extends Activity {
 
         @Override protected void onDraw(Canvas c) {
             int w = getWidth(), hgt = getHeight();
-            float cy = hgt - dp(13);            // 轨道贴近底部，上方留气泡空间
+            float cy = hgt - dp(13);
             float r = dp(1.75f);
             c.drawRoundRect(0, cy - r, w, cy + r, r, r, pTrack);
             if (buf > 0.01f) c.drawRoundRect(0, cy - r, w * buf, cy + r, r, r, pBuf);
@@ -377,8 +433,8 @@ public class VideoActivity extends Activity {
             float tx = Math.max(dp(6), Math.min(w - dp(6), w * frac));
             float tr = scrub ? dp(6.5f) : dp(2.75f);
             c.drawCircle(tx, cy, tr, pThumb);
-            if (scrub) {   // 拖拽气泡：时间跟手指
-                String t = fmt(durMs() > 0 ? (int) (frac * durMs()) : 0);
+            if (scrub) {
+                String t = fmt(durMs() > 0 ? (long) (frac * durMs()) : 0);
                 float tw = pBubTx.measureText(t);
                 float bw = tw + dp(20), bh = dp(26);
                 float bx = Math.max(dp(2), Math.min(w - bw - dp(2), tx - bw / 2));
@@ -399,15 +455,15 @@ public class VideoActivity extends Activity {
                     return true;
                 case MotionEvent.ACTION_MOVE:
                     frac = clamp01(x / getWidth());
-                    curT.setText(fmt((int) (frac * Math.max(0, durMs()))));
+                    curT.setText(fmt((long) (frac * Math.max(0, durMs()))));
                     invalidate();
                     return true;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
                     scrub = false;
-                    int dur = durMs();
-                    if (mp != null && dur > 0) {
-                        try { mp.seekTo(Math.round(frac * dur)); } catch (Exception ignored) {}
+                    long dur = durMs();
+                    if (player != null && dur > 0) {
+                        try { player.seekTo(Math.round(frac * dur)); } catch (Exception ignored) {}
                     }
                     invalidate();
                     showHud();
@@ -415,23 +471,23 @@ public class VideoActivity extends Activity {
             }
             return true;
         }
-
-        private int durMs() { try { return mp != null ? mp.getDuration() : 0; } catch (Exception e) { return 0; } }
     }
 
-    /** 玻璃药丸按钮（底部栏：倍速/铺满/旋转/上一集/下一集） */
+    /** 玻璃药丸按钮（底部栏：倍速/铺满） */
     private TextView pill(String t, View.OnClickListener l) {
         TextView v = new TextView(this);
         v.setText(t);
         v.setTextColor(0xFFFFFFFF);
         v.setTextSize(13);
+        v.setGravity(Gravity.CENTER);
+        v.setMinWidth(dp(56));
         v.setPadding(dp(14), dp(7), dp(14), dp(7));
         v.setBackgroundDrawable(glass(19));
         v.setOnClickListener(l);
         return v;
     }
 
-    /** 圆形图标按钮（返回/播放/上一集/下一集） */
+    /** 圆形图标按钮（返回/播放/⋮） */
     private TextView circle(String t, float sizeSp, int dimDp, View.OnClickListener l) {
         TextView v = new TextView(this);
         v.setText(t);
@@ -441,7 +497,7 @@ public class VideoActivity extends Activity {
         GradientDrawable g = new GradientDrawable();
         g.setShape(GradientDrawable.OVAL);
         g.setColor(0x2E000000);
-        g.setStroke(dp(1), 0x2EFFffff);
+        g.setStroke(dp(1), 0x2EFFFFFF);
         v.setBackgroundDrawable(g);
         v.setOnClickListener(l);
         v.setLayoutParams(new LinearLayout.LayoutParams(dp(dimDp), dp(dimDp)));
@@ -469,21 +525,8 @@ public class VideoActivity extends Activity {
         setContentView(root);
 
         tex = new TextureView(this);
-        tex.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
-            @Override public void onSurfaceTextureAvailable(SurfaceTexture st, int w, int hh) {
-                surf = new Surface(st);
-                if (mp != null) { try { mp.setSurface(surf); } catch (Exception ignored) {} }
-                fitVideo();
-            }
-            @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture st) {
-                if (surf != null) { try { surf.release(); } catch (Exception ignored) {} }
-                surf = null;
-                return true;
-            }
-            @Override public void onSurfaceTextureSizeChanged(SurfaceTexture st, int w, int hh) { fitVideo(); }
-            @Override public void onSurfaceTextureUpdated(SurfaceTexture st) {}
-        });
         root.addView(tex, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+        player.setVideoTextureView(tex);
         root.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
             @Override public void onLayoutChange(View v, int l, int t, int r, int b2, int ol, int ot, int or, int ob) { fitVideo(); }
         });
@@ -498,21 +541,6 @@ public class VideoActivity extends Activity {
         cueV.setMaxWidth(dp(320));
         cueV.setGravity(Gravity.CENTER);
         root.addView(cueV, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
-
-        // 双击快退/快进的快闪圈（跟随点按位置）
-        flashV = new TextView(this);
-        flashV.setTextColor(0xFFFFFFFF);
-        flashV.setTextSize(13.5f);
-        flashV.setGravity(Gravity.CENTER);
-        {
-            GradientDrawable g = new GradientDrawable();
-            g.setShape(GradientDrawable.OVAL);
-            g.setColor(0x40000000);
-            g.setStroke(dp(1), 0x40FFFFFF);
-            flashV.setBackgroundDrawable(g);
-        }
-        flashV.setVisibility(View.GONE);
-        root.addView(flashV, new FrameLayout.LayoutParams(dp(76), dp(76), Gravity.CENTER));
 
         // 长按 2 倍速角标（屏幕下方居中）
         spd2x = new TextView(this);
@@ -543,7 +571,7 @@ public class VideoActivity extends Activity {
         centerPlay.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { togglePlay(); } });
         root.addView(centerPlay, new FrameLayout.LayoutParams(dp(80), dp(80), Gravity.CENTER));
 
-        // 顶栏：返回 + 标题 + 序号
+        // 顶栏：返回 + 标题 + 序号 + 更多(⋮)
         topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -565,6 +593,12 @@ public class VideoActivity extends Activity {
         cntV.setPadding(dp(11), dp(5), dp(11), dp(5));
         cntV.setBackgroundDrawable(roundBg(0x33000000, 16));
         topBar.addView(cntV, new LinearLayout.LayoutParams(-2, -2));
+        moreBtn = circle("⋮", 20, 42, new View.OnClickListener() { @Override public void onClick(View v) { showMoreMenu(); } });
+        {
+            LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(dp(42), dp(42));
+            mp.leftMargin = dp(8);
+            topBar.addView(moreBtn, mp);
+        }
         root.addView(topBar, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
 
         // 底栏：进度条 + 按钮排
@@ -594,10 +628,7 @@ public class VideoActivity extends Activity {
         slash.setAlpha(0.45f);
         slash.setText("/");
         spdBtn = pill("倍速 ▾", new View.OnClickListener() { @Override public void onClick(View v) { showSpeedMenu(); } });
-        spdBtn.setMinWidth(dp(58));
-        spdBtn.setGravity(Gravity.CENTER);
         fillBtn = pill(fillMode ? "铺满" : "适配", new View.OnClickListener() { @Override public void onClick(View v) { toggleFill(); } });
-        TextView rotBtn = pill("↻", new View.OnClickListener() { @Override public void onClick(View v) { toggleRotate(); } });
 
         row.addView(playIco, w2);
         LinearLayout.LayoutParams tm = new LinearLayout.LayoutParams(-2, -2);
@@ -610,7 +641,6 @@ public class VideoActivity extends Activity {
         row.addView(nextB, w2);
         row.addView(spdBtn, w2);
         row.addView(fillBtn, w2);
-        row.addView(rotBtn, w2);
         botBar.addView(row, new LinearLayout.LayoutParams(-1, -2));
         root.addView(botBar, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
     }
@@ -674,60 +704,43 @@ public class VideoActivity extends Activity {
 
     private void cueHide() { h.removeCallbacks(cueHideR); cueV.setVisibility(View.GONE); }
 
-    /** 双击两侧快退/快进的快闪反馈（B站式：点哪边哪边亮） */
-    private void flash(boolean forward, float x) {
-        flashV.setText(forward ? "10秒 ››" : "‹‹ 10秒");
-        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) flashV.getLayoutParams();
-        lp.leftMargin = Math.max(dp(20), Math.min(root.getWidth() - dp(96), (int) x - dp(38)));
-        flashV.setLayoutParams(lp);
-        flashV.setVisibility(View.VISIBLE);
-        flashV.animate().cancel();
-        flashV.setAlpha(1f);
-        flashV.setScaleX(0.82f);
-        flashV.setScaleY(0.82f);
-        flashV.animate().alpha(0f).scaleX(1.15f).scaleY(1.15f).setDuration(560)
-            .withEndAction(new Runnable() { @Override public void run() { flashV.setVisibility(View.GONE); } });
-    }
-
-    // ================= 手势（B站式） =================
+    // ================= 手势（B站式，双击快进快退已按需求移除：双击=播放/暂停） =================
 
     private void bindGestures() {
         gd = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
             @Override public boolean onSingleTapConfirmed(MotionEvent e) { toggleHud(); return true; }
 
             @Override public boolean onDoubleTap(MotionEvent e) {
-                int w = root.getWidth();
-                if (e.getX() < w / 3f) { flash(false, e.getX()); skip(-10000); }
-                else if (e.getX() > w * 2f / 3f) { flash(true, e.getX()); skip(10000); }
-                else togglePlay();
+                togglePlay();
+                cue(player != null && player.getPlayWhenReady() ? "▶ 播放" : "⏸ 暂停", 600);
+                showHud();
                 return true;
             }
 
             @Override public void onLongPress(MotionEvent e) {
-                if (mp == null || gmode != null || !mp.isPlaying()) return;
+                if (player == null || gmode != null || !player.isPlaying()) return;
                 holding2x = true;
-                try { mp.setPlaybackParams(new PlaybackParams().setSpeed(2f)); } catch (Exception ignored) {}
+                try { player.setPlaybackSpeed(2f); } catch (Exception ignored) {}
                 spd2x.setVisibility(View.VISIBLE);
             }
 
             @Override public boolean onScroll(MotionEvent e1, MotionEvent e2, float dx, float dy) {
-                if (e1 == null || mp == null) return true;
+                if (e1 == null || player == null) return true;
                 int w = root.getWidth(), hg = root.getHeight();
                 if (gmode == null) {
                     if (holding2x) {   // 长按加速中开始拖动：先恢复正常倍速，别两个手势叠加
                         holding2x = false;
                         spd2x.setVisibility(View.GONE);
-                        try { mp.setPlaybackParams(new PlaybackParams().setSpeed(speed)); } catch (Exception ignored) {}
+                        try { player.setPlaybackSpeed(speed); } catch (Exception ignored) {}
                         cueHide();
                     }
                     float tdx = e2.getX() - e1.getX(), tdy = e2.getY() - e1.getY();
-                    long dur = 0;
-                    try { dur = mp.getDuration(); } catch (Exception ignored) {}
-                    if (Math.abs(tdx) > 26 && Math.abs(tdx) > Math.abs(tdy) && dur > 0) {
+                    long dur = durMs();
+                    if (Math.abs(tdx) > 20 && Math.abs(tdx) > Math.abs(tdy) && dur > 0) {
                         gmode = "seek";
                         seekBaseMs = safePos();
                         seekTargetMs = seekBaseMs;
-                    } else if (Math.abs(tdy) > 26) {
+                    } else if (Math.abs(tdy) > 20) {
                         gmode = e1.getX() < w / 2f ? "bright" : "vol";
                         float b0 = getWindow().getAttributes().screenBrightness;
                         bright0 = (b0 > 0 && b0 <= 1) ? b0 : 0.55f;
@@ -735,16 +748,15 @@ public class VideoActivity extends Activity {
                     } else return true;
                 }
                 if ("seek".equals(gmode)) {
-                    long dur = 0;
-                    try { dur = mp.getDuration(); } catch (Exception ignored) {}
+                    long dur = durMs();
                     if (dur <= 0) return true;
-                    // 整屏横拖 ≈ 1.6 倍时长（B站手感）
+                    // 整屏横拖 ≈ 1.0 倍时长（原 1.6 倍太快，微调容易过头）
                     seekTargetMs = Math.max(0, Math.min(dur - 300,
-                        seekBaseMs + (long) ((e2.getX() - e1.getX()) / w * (dur * 1.6f))));
+                        seekBaseMs + (long) ((e2.getX() - e1.getX()) / w * dur)));
                     pbar.setFrac(seekTargetMs / (float) dur);
-                    curT.setText(fmt((int) seekTargetMs));
+                    curT.setText(fmt(seekTargetMs));
                     long dd = (seekTargetMs - seekBaseMs) / 1000;
-                    cue((dd >= 0 ? "+" : "") + dd + "s · " + fmt((int) seekBaseMs) + " → " + fmt((int) seekTargetMs), 0);
+                    cue((dd >= 0 ? "+" : "") + dd + "s · " + fmt(seekBaseMs) + " → " + fmt(seekTargetMs), 0);
                 } else if ("bright".equals(gmode)) {
                     float f = Math.max(0.06f, Math.min(1f, bright0 + (e1.getY() - e2.getY()) / (hg * 0.8f)));
                     setBright(f);
@@ -762,19 +774,15 @@ public class VideoActivity extends Activity {
         });
     }
 
-    private int safePos() {
-        try { return mp != null ? mp.getCurrentPosition() : 0; } catch (Exception e) { return 0; }
-    }
-
     /** 手指抬起：落快进、恢复长按倍速、收提示 */
     private void endGestures() {
         if (holding2x) {
             holding2x = false;
             spd2x.setVisibility(View.GONE);
-            try { if (mp != null) mp.setPlaybackParams(new PlaybackParams().setSpeed(speed)); } catch (Exception ignored) {}
+            try { if (player != null) player.setPlaybackSpeed(speed); } catch (Exception ignored) {}
         }
-        if ("seek".equals(gmode) && seekTargetMs >= 0 && mp != null) {
-            try { mp.seekTo((int) seekTargetMs); } catch (Exception ignored) {}
+        if ("seek".equals(gmode) && seekTargetMs >= 0 && player != null) {
+            try { player.seekTo(seekTargetMs); } catch (Exception ignored) {}
             seekTargetMs = -1;
         }
         if (gmode != null) { gmode = null; cueHide(); showHud(); }
@@ -791,38 +799,29 @@ public class VideoActivity extends Activity {
 
     private final Runnable tick = new Runnable() {
         @Override public void run() {
-            if (mp != null) {
+            if (player != null) {
                 try {
-                    int pos = mp.getCurrentPosition(), dur = mp.getDuration();
+                    long pos = player.getCurrentPosition(), dur = durMs();
                     if (dur > 0) {
+                        lastKnownPos = pos;
                         pbar.setFrac(pos / (float) dur);
+                        pbar.setBuf(Math.min(1f, player.getBufferedPosition() / (float) dur));
                         curT.setText(fmt(pos));
                     }
                     setPlayIco();
-                    if (mp.isPlaying() && Math.abs(pos - lastSaveMs) > 3000) { lastSaveMs = pos; saveProg(); }
+                    if (player.isPlaying() && Math.abs(pos - lastSaveMs) > 3000) { lastSaveMs = (int) pos; saveProg(); }
                 } catch (Exception ignored) {}
             }
             h.postDelayed(this, 500);
         }
     };
 
-    private final AudioManager.OnAudioFocusChangeListener afL = new AudioManager.OnAudioFocusChangeListener() {
-        @Override public void onAudioFocusChange(int f) {
-            if ((f == AudioManager.AUDIOFOCUS_LOSS || f == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
-                && mp != null && mp.isPlaying()) {
-                try { mp.pause(); } catch (Exception ignored) {}
-                setPlayIco();
-                showHud();
-            }
-        }
-    };
-
-    /** 本机也解不动时的兜底：交给系统里能放的 App（图库/VLC 等） */
-    private void fail() {
+    /** 解码真失败（重试过一次仍失败）的兜底：交给系统里能放的 App（图库/VLC 等） */
+    private void fail(String errName) {
         cueHide();
         new AlertDialog.Builder(this)
             .setTitle("播放不了")
-            .setMessage("这台手机的解码器放不了这个文件（编码比较少见）。\n可以试试用其他应用打开。")
+            .setMessage("这台手机的解码器放不了这个文件。\n（" + (errName == null ? "未知错误" : errName) + "）\n可以试试用其他应用打开。")
             .setPositiveButton("用其他应用打开", new android.content.DialogInterface.OnClickListener() {
                 @Override public void onClick(android.content.DialogInterface d, int w) { openExternal(); }
             })
@@ -843,15 +842,13 @@ public class VideoActivity extends Activity {
             it.setDataAndType(uri, MainActivity.mimeOf(f.getName()));
             it.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             startActivity(it);
-            finish();
         } catch (Exception e) {
             android.widget.Toast.makeText(this, "打不开：" + e.getMessage(), android.widget.Toast.LENGTH_LONG).show();
-            finish();
         }
     }
 
-    private static String fmt(int ms) {
-        int s = Math.max(0, ms / 1000);
+    private static String fmt(long ms) {
+        int s = Math.max(0, (int) (ms / 1000));
         int hh = s / 3600, m = (s % 3600) / 60, ss = s % 60;
         return hh > 0 ? hh + ":" + String.format(Locale.US, "%02d:%02d", m, ss)
             : m + ":" + String.format(Locale.US, "%02d", ss);
@@ -870,29 +867,12 @@ public class VideoActivity extends Activity {
     protected void onResume() {
         super.onResume();
         immersive();
-        try { am.requestAudioFocus(afL, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN); } catch (Exception ignored) {}
-        if (mp != null) { h.removeCallbacks(tick); h.post(tick); }
     }
 
     @Override
     protected void onPause() {
         super.onPause();
         saveProg();
-        h.removeCallbacks(tick);
-        if (mp != null && mp.isPlaying()) { try { mp.pause(); setPlayIco(); } catch (Exception ignored) {} }
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        h.removeCallbacksAndMessages(null);
-        saveProg();
-        releaseMp();
-        try { am.abandonAudioFocus(afL); } catch (Exception ignored) {}
-        try {
-            android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
-            lp.screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
-            getWindow().setAttributes(lp);
-        } catch (Exception ignored) {}
+        if (player != null && player.isPlaying()) player.pause();
     }
 }

@@ -386,6 +386,15 @@ public class MainActivity extends Activity {
             } catch (Exception e) { return ""; }
         }
 
+        /** 写系统剪贴板（链接记忆/详情页的「复制链接·标题」按钮用） */
+        @JavascriptInterface public boolean writeClipboard(final String text) {
+            try {
+                android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("vd", text == null ? "" : text));
+                return true;
+            } catch (Exception e) { return false; }
+        }
+
         /** 读 App 私有 WebView 里存的 cookies（含 HttpOnly），格式 "k=v; k2=v2" */
         @JavascriptInterface public String getCookie(String url) {
             return android.webkit.CookieManager.getInstance().getCookie(url);

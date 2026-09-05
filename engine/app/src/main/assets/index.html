@@ -320,6 +320,8 @@
   /* ---------- 键盘弹出：底部导航藏起来（主流 App 行为——导航栏不飘在键盘上面） ---------- */
   body.kb { padding-bottom:0 !important; }
   body.kb .tabbar, body.kb #mgbar { display:none !important; }
+  /* 批量管理栏弹出时垫高页面底部：否则列表最后一行被操作栏盖住，点不到也看不全 */
+  body.mg { padding-bottom:calc(var(--tabbar-h) + 62px + env(safe-area-inset-bottom)) !important; }
 
   input, button, a, .del, .linklike { touch-action:manipulation; }
   input { border-radius:14px; border:1px solid transparent; background:#fff; font-size:16px; outline:none; }
@@ -367,25 +369,18 @@
 
   <!-- ================ 我的 ================ -->
   <section class="view" id="view-mine">
-    <div class="mine-head">
-      <span class="ava">📥</span>
-      <div>
-        <div class="nm">视频下载器</div>
-        <div class="be"><span class="dot2"></span><span id="be-text">手机本地（离线）</span></div>
-      </div>
-    </div>
-    <div class="menu">
+    <div class="menu" style="margin-top:16px">
       <button class="mrow" onclick="subView('lib')">
         <span class="mi c2">💾</span>我的保存<span class="mv" id="lib-n"></span><span class="arw">›</span>
       </button>
-      <button class="mrow" onclick="toast('源码将在开发完成后一起开放，敬请期待')">
-        <span class="mi c4">📄</span>源代码<span class="mv">开发完成后开放</span><span class="arw">›</span>
+      <button class="mrow" onclick="openRepo()">
+        <span class="mi c4">📄</span>源代码<span class="mv">Gitee · zcyzzcy/downloadtool</span><span class="arw">›</span>
       </button>
       <button class="mrow" onclick="subView('settings')">
         <span class="mi c6">⚙️</span>设置<span class="mv" id="sd-short"></span><span class="arw">›</span>
       </button>
       <button class="mrow" onclick="subView('about')">
-        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.34</span><span class="arw">›</span>
+        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.35</span><span class="arw">›</span>
       </button>
     </div>
   </section>
@@ -398,18 +393,8 @@
     </div>
     <div class="card" style="font-size:12.5px;color:var(--soft);line-height:2">
       <b style="color:var(--text)">视频下载器</b> · 个人自用 · 完全离线<br>
-      网页 v2.34 · App 壳 v1.35（code 36）<br>
+      网页 v2.35 · App 壳 v1.36（code 37）<br>
       解析 / 下载 / 转码全部在本机完成，无服务器、不上传任何数据
-    </div>
-    <div class="card" style="margin-top:12px">
-      <div style="font-weight:600;font-size:14px;margin-bottom:9px">支持的视频源</div>
-      <div class="chips">
-        <span class="chip">B站</span><span class="chip">抖音</span><span class="chip">微博</span>
-        <span class="chip">小红书</span><span class="chip">西瓜视频</span><span class="chip">磁力链接</span>
-        <span class="chip">小黑盒</span><span class="chip">森空岛</span><span class="chip">米游社</span>
-        <span class="chip">库街区</span><span class="chip">TapTap</span>
-        <span class="chip">主页/合集批量</span><span class="chip">上千站点</span>
-      </div>
     </div>
     <div class="card" style="margin-top:12px;font-size:12px;color:var(--muted);line-height:1.9">
       <b style="color:var(--soft)">免责声明</b><br>
@@ -468,41 +453,54 @@
     </div>
   </section>
 
-  <!-- ================ 子页：设置（按「下载 / 账号 / 记录」归类，不再平铺） ================ -->
+  <!-- ================ 子页：设置（纯菜单：各项在子页里展开） ================ -->
   <section class="view" id="view-settings">
     <div class="sub-head">
       <button class="back" onclick="subView('mine')">‹ 设置</button>
       <span class="st">设置</span>
     </div>
-    <div class="card">
-      <div class="set-sec">⬇ 下载</div>
-      <div style="font-weight:600;font-size:14px">文件保存位置</div>
-      <div id="sd-path" style="font-size:11.5px;color:var(--muted);word-break:break-all;margin:6px 0 10px"></div>
-      <div id="sd-opts" style="margin:0 -16px"></div>
-      <div id="sd-err" style="display:none;font-size:12px;color:var(--err);margin-top:8px;line-height:1.7">切换失败：那个位置现在写不进去（先在系统设置给本 App 授权「所有文件访问」再试）</div>
-      <div style="font-size:11px;color:var(--muted);margin-top:10px;line-height:1.7">切换位置时只搬本 App 下载的文件，相册里的其他内容不会动。</div>
-      <div style="height:1px;background:var(--line);margin:14px -16px 12px"></div>
-      <div style="font-weight:600;font-size:14px">下载清晰度</div>
-      <div style="font-size:11px;color:var(--muted);margin:7px 0 10px">默认最高，没有最高就自动往下兼容</div>
-      <div id="q-opts" style="display:flex;gap:7px;flex-wrap:wrap"></div>
-    </div>
-    <div class="card" style="margin-top:12px;padding:2px 0 2px">
-      <div class="set-sec" style="padding:0 16px">🔑 账号</div>
+    <div class="menu" style="margin-top:16px">
+      <button class="mrow" onclick="subView('setdir')">
+        <span class="mi c1">📂</span>文件保存位置<span class="mv" id="setdir-short"></span><span class="arw">›</span>
+      </button>
+      <button class="mrow" onclick="subView('setqual')">
+        <span class="mi c6">🎬</span>下载清晰度<span class="mv" id="setqual-short"></span><span class="arw">›</span>
+      </button>
       <button class="mrow" onclick="subView('login')">
         <span class="mi c3">🔑</span>登录信息管理<span class="mv" id="ck-short">检查中…</span><span class="arw">›</span>
       </button>
-    </div>
-    <div class="card" style="margin-top:12px;padding:2px 0 2px">
-      <div class="set-sec" style="padding:0 16px">🗂 记录</div>
       <button class="mrow" onclick="subView('donemem')">
-        <span class="mi c1">🔗</span>已下载链接记忆<span class="mv" id="dlmem-n"></span><span class="arw">›</span>
-      </button>
-      <button class="mrow" onclick="unhideAll()">
-        <span class="mi c2">👁</span>恢复隐藏的记录<span class="mv">「仅删记录」的找回来</span><span class="arw">›</span>
+        <span class="mi c4">🔗</span>已下载链接记忆<span class="mv" id="dlmem-n"></span><span class="arw">›</span>
       </button>
       <button class="mrow" onclick="clearDoneMem()">
         <span class="mi c5">🧹</span>清除链接记忆<span class="mv">清空后可重新下载</span><span class="arw">›</span>
       </button>
+    </div>
+  </section>
+
+  <!-- ================ 子页：设置 → 文件保存位置 ================ -->
+  <section class="view" id="view-setdir">
+    <div class="sub-head">
+      <button class="back" onclick="subView('settings')">‹ 文件保存位置</button>
+      <span class="st">文件保存位置</span>
+    </div>
+    <div class="card">
+      <div id="sd-path" style="font-size:11.5px;color:var(--muted);word-break:break-all;margin:2px 0 10px"></div>
+      <div id="sd-opts" style="margin:0 -16px"></div>
+      <div id="sd-err" style="display:none;font-size:12px;color:var(--err);margin-top:8px;line-height:1.7">切换失败：那个位置现在写不进去（先在系统设置给本 App 授权「所有文件访问」再试）</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:10px;line-height:1.7">切换位置时只搬本 App 下载的文件，相册里的其他内容不会动。</div>
+    </div>
+  </section>
+
+  <!-- ================ 子页：设置 → 下载清晰度 ================ -->
+  <section class="view" id="view-setqual">
+    <div class="sub-head">
+      <button class="back" onclick="subView('settings')">‹ 下载清晰度</button>
+      <span class="st">下载清晰度</span>
+    </div>
+    <div class="card">
+      <div style="font-size:12px;color:var(--muted);margin:2px 0 12px;line-height:1.7">默认最高，没有最高就自动往下兼容。</div>
+      <div id="q-opts" style="display:flex;gap:7px;flex-wrap:wrap"></div>
     </div>
   </section>
 
@@ -578,7 +576,7 @@
     <div class="vd-title2" id="vd-title"></div>
     <div class="vd-meta2" id="vd-meta"></div>
     <div class="vd-src" id="vd-src" style="display:none" onclick="vdCopySrc()">
-      <span>🔗</span><span class="vs-tx" id="vd-src-tx"></span><span class="vs-go">复制</span>
+      <span class="vs-tx" id="vd-src-tx"></span><span class="vs-go">复制</span>
     </div>
     <div class="vd-btns">
       <button class="vd-play" onclick="vdPlay()">▶ 播放</button>
@@ -652,6 +650,11 @@
 <script>
 const STATUS = {queued:'排队中', parsing:'解析中…', downloading:'下载中', merging:'合并转码中…', done:'已完成', error:'失败'};
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// 标题清洗：抖音/B站等文案尾巴上的 #话题 和 @用户 不参与展示（剥掉后若全空则保留原文）
+function cleanTitle(s) {
+  const out = String(s || '').replace(/#[^\s#，。！？,!?]+#?/g, ' ').replace(/@[^\s@:：,，]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  return out || String(s || '').trim();
+}
 
 // 文件访问统一走本地引擎虚拟域名 http://vd.local（MainActivity 拦截后直读手机上的文件）
 // 文件名统一"取最后一段+安全解码"：decodeURIComponent 对 "50%off.mp4" 这类非法序列会直接抛错
@@ -687,12 +690,15 @@ function applyView(v) {
   document.getElementById('tb-home').classList.toggle('on', v === 'home');
   document.getElementById('tb-mine').classList.toggle('on', v !== 'home' && v !== 'player');
   document.querySelector('.tabbar').style.display = v === 'player' ? 'none' : '';
-  // 视图没变（开/关全屏浮层的 popstate）时不动滚动位置，否则列表会跳回顶部
-  if (prev !== v) window.scrollTo({ top: v === 'player' ? 0 : (viewScroll[v] || 0) });
+  // 视图没变（开/关全屏浮层的 popstate）时不动滚动位置；behavior:instant 必须：
+  // html 的 scroll-behavior:smooth 会把恢复位置变成可见的滚动动画（先跳顶再滚回去）
+  if (prev !== v) window.scrollTo({ top: v === 'player' ? 0 : (viewScroll[v] || 0), behavior: 'instant' });
   if (v === 'mine') { refreshCookies(); loadLib(); }
   else if (v === 'lib') loadLib();
   else if (v === 'login') refreshCookies();
   else if (v === 'settings') renderSettings();
+  else if (v === 'setdir') renderSetdir();
+  else if (v === 'setqual') renderSetqual();
   else if (v === 'donemem') loadMem();
 }
 function showView(v) {
@@ -834,7 +840,7 @@ function toast(text) {
   if (!el) {
     el = document.createElement('div');
     el.id = 'toast';
-    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:calc(var(--tabbar-h) + 24px + env(safe-area-inset-bottom));background:rgba(23,26,32,.92);color:#fff;padding:10px 20px;border-radius:22px;font-size:13px;z-index:99;max-width:86%;text-align:center;box-shadow:0 6px 18px rgba(0,0,0,.2);transition:opacity .2s';
+    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:calc(var(--tabbar-h) + 24px + env(safe-area-inset-bottom));background:rgba(23,26,32,.92);color:#fff;padding:10px 20px;border-radius:22px;font-size:13px;z-index:99;max-width:86%;text-align:center;box-shadow:0 6px 18px rgba(0,0,0,.2);transition:opacity .2s;pointer-events:none';
     document.body.appendChild(el);
   }
   el.textContent = text;
@@ -960,11 +966,13 @@ function thumbUrl(n) {
   try { AndroidBridge.localThumb(n); } catch (e) {}   // 后台生成封面，生成好之前先用占位图
   return localThumbUrl(n);
 }
-// 缩略图失败重试：首帧是引擎后台逐个抽的（老视频库要排队，抽帧失败还会退 ffmpeg 再试一轮），
-// 窗口放宽到 15 次；彻底失败换浅色占位，杜绝黑框
+// 缩略图失败重试：封面是引擎后台逐个抽的（存量大时要排队；mmr 失败还会退 ffmpeg 再试一轮），
+// 每次重试顺带重新排队生成（首次渲染时那次排队可能没赶上），窗口 30 次；彻底失败换浅色占位
 function thumbFail(el) {
   el.dataset.f = (+el.dataset.f || 0) + 1;
-  if (+el.dataset.f <= 15) { setTimeout(function () { el.src = el.src.split('?r=')[0] + '?r=' + Date.now(); }, 3000); return; }
+  if (+el.dataset.f <= 30) {
+    try { if (el.dataset.n && bridgeOk('localThumb')) AndroidBridge.localThumb(el.dataset.n); } catch (e) {}
+    setTimeout(function () { el.src = el.src.split('?r=')[0] + '?r=' + Date.now(); }, 3000); return; }
   el.style.opacity = 0;
   const p = el.parentNode;
   if (p && p.className.indexOf('nothumb') < 0) p.className += ' nothumb';
@@ -973,7 +981,8 @@ function thumbFail(el) {
 function thumbBox(name, small) {
   const u = esc(thumbUrl(name));
   const w = (small ? 'hthw' : 'mthw') + (isImgName(name) ? ' img' : ''), fg = small ? 'hth' : 'mth';
-  return `<span class="${w}"><img class="mth-bg" aria-hidden="true" loading="lazy" decoding="async" src="${u}" onerror="thumbFail(this)"><img class="${fg}" loading="lazy" decoding="async" src="${u}" onerror="thumbFail(this)"></span>`;
+  const n = esc(name);
+  return `<span class="${w}"><img class="mth-bg" aria-hidden="true" data-n="${n}" loading="lazy" decoding="async" src="${u}" onerror="thumbFail(this)"><img class="${fg}" data-n="${n}" loading="lazy" decoding="async" src="${u}" onerror="thumbFail(this)"></span>`;
 }
 function fmtDate(ms) {
   const d = new Date(ms);
@@ -1088,9 +1097,11 @@ const selSet = new Set();  // 保存页勾选：文件名
 const homeSel = new Set(); // 首页勾选：任务 id
 const memSel = new Set();  // 链接记忆勾选：链接
 function mgBarSync() {
-  document.getElementById('mgbar').style.display = (manage || hManage || mManage) ? 'flex' : 'none';
+  const on = manage || hManage || mManage;
+  document.getElementById('mgbar').style.display = on ? 'flex' : 'none';
   document.getElementById('mg-file').style.display = manage ? '' : 'none';
   document.getElementById('mg-hide').textContent = manage ? '删记录' : '删除记录';
+  document.body.classList.toggle('mg', on);   // 垫高页面底部，批量栏不再盖住列表最后一行
   updMgN();
 }
 function resetLibManage() {
@@ -1156,6 +1167,7 @@ function toggleMemManage() {
 function exitManage() {
   resetLibManage(); resetHomeManage(); resetMemManage();
   document.getElementById('mgbar').style.display = 'none';
+  document.body.classList.remove('mg');
 }
 function mgToggle(name) {
   if (selSet.has(name)) selSet.delete(name); else selSet.add(name);
@@ -1227,6 +1239,19 @@ let memItems = [];
 let memSearchT = 0;
 function memSearchDeb() { clearTimeout(memSearchT); memSearchT = setTimeout(renderMem, 250); }
 function hostOf(u) { try { return new URL(u).host; } catch (e) { return String(u || '').slice(0, 32); } }
+// 链接 → 平台显示名（认不出的显示域名）
+function platformOf(u) {
+  const s = String(u || '').toLowerCase();
+  const m = [
+    ['douyin', '抖音'], ['bilibili', 'B站'], ['b23.tv', 'B站'], ['weibo', '微博'], ['t.cn', '微博'],
+    ['xiaohongshu', '小红书'], ['xhslink', '小红书'], ['miyoushe', '米游社'], ['mihoyo', '米游社'],
+    ['kurobbs', '库街区'], ['kurogame', '库街区'], ['xiaoheihe', '小黑盒'], ['heybox', '小黑盒'],
+    ['skland', '森空岛'], ['kuaishou', '快手'], ['mp.weixin', '微信公众号'], ['zhihu', '知乎'],
+    ['ixigua', '西瓜'], ['b23', 'B站'], ['magnet:', '磁力'],
+  ];
+  for (const it of m) if (s.indexOf(it[0]) >= 0) return it[1];
+  return hostOf(u);
+}
 function loadMem() {
   memItems = doneListRaw().slice().reverse();   // 最新在前
   renderMem();
@@ -1244,7 +1269,7 @@ function renderMem() {
       <span class="msel">${sel ? '✓' : ''}</span>
       <span class="ht">
         <span class="hn" title="${esc(r.t || r.u)}">${esc(r.t || '（无标题）')}</span>
-        <span class="hm">${esc(r.f && r.f.length ? r.f.length + ' 个文件 · ' : '')}${esc(hostOf(r.u))}${r.at ? ' · ' + fmtDate(r.at) : ''}</span>
+        <span class="hm">${esc(platformOf(r.u))} · ${esc(r.u)}</span>
       </span>
       <span class="hacts"><button class="del" onclick="event.stopPropagation();memDetail(${i})">详情</button></span>
     </div>`;
@@ -1951,7 +1976,7 @@ function vdRender() {
   const src = document.getElementById('vd-src');
   window.__vdSrc = rec || null;
   if (rec) {
-    document.getElementById('vd-src-tx').textContent = (rec.t ? rec.t + ' · ' : '') + rec.u;
+    document.getElementById('vd-src-tx').textContent = rec.u;   // 标题已单独一行：这里只放链接本身
     src.style.display = 'flex';
   } else src.style.display = 'none';
 }
@@ -2162,11 +2187,11 @@ window.onLocalState = function (id, state, title, error, filesJson) {
   const t = localTaskById(id);
   if (!t) return;
   if (t.error && t.error.indexOf('中断') >= 0) t.error = '';   // 页面刷新后引擎仍在跑：复活该任务
-  if (state === 'parsing') { t.status = 'parsing'; t.title = title || '解析中…'; }
-  else if (state === 'downloading') { t.status = 'downloading'; if (title) t.title = title; }
-  else if (state === 'merging') { t.status = 'merging'; if (title) t.title = title; }   // 转码归一成 mp4（部分手机解不了 HEVC/webm）
+  if (state === 'parsing') { t.status = 'parsing'; t.title = cleanTitle(title) || '解析中…'; }
+  else if (state === 'downloading') { t.status = 'downloading'; if (title) t.title = cleanTitle(title); }
+  else if (state === 'merging') { t.status = 'merging'; if (title) t.title = cleanTitle(title); }   // 转码归一成 mp4（部分手机解不了 HEVC/webm）
   else if (state === 'done') {
-    t.status = 'done'; t.progress = 100; if (title) t.title = title;
+    t.status = 'done'; t.progress = 100; if (title) t.title = cleanTitle(title);
     if (filesJson) {   // 引擎回报的实际产出文件（yt-dlp 输出行 / 磁力平移动 / 采集下载）
       try {
         t.files = JSON.parse(filesJson);
@@ -2177,7 +2202,7 @@ window.onLocalState = function (id, state, title, error, filesJson) {
       const f = claimNewestFile();
       if (f) { t.filename = f.name; t.file = f.name; t.files = [f.name]; t.sizeMB = f.sizeMB; }
     }
-    rememberDone(t.url, (t.files && t.files.length) ? t.files : (t.filename ? [t.filename] : null), t.title);   // 链接记忆：标题+链接+文件
+    rememberDone(t.url, (t.files && t.files.length) ? t.files : (t.filename ? [t.filename] : null), cleanTitle(t.title));   // 链接记忆：标题+链接+文件
     try { if (document.hidden) AndroidBridge.notify('下载完成', (title || '视频').slice(0, 40)); } catch (e) {}
     if (navigator.vibrate) navigator.vibrate([40, 60, 40]);
     if (curView === 'lib') loadLib();
@@ -2231,13 +2256,24 @@ const SD_OPTS = [
   { m: 'custom', n: '自定义…', d: '选手机上任意文件夹' },
 ];
 function saveDirMode() { try { return bridgeOk('saveDirMode') ? AndroidBridge.saveDirMode() : 'download'; } catch (e) { return 'download'; } }
+const Q_OPTS = [['auto', '最高'], ['1080', '1080P'], ['720', '720P'], ['480', '480P']];
+// 设置菜单页：每项只显示当前值摘要（具体选项在各自子页里展开）
 function renderSettings() {
+  const cur = saveDirMode();
+  const opt = SD_OPTS.find(o => o.m === cur) || SD_OPTS[0];
+  const t = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  t('setdir-short', cur === 'custom' ? '自定义' : opt.n.replace(/（.*）$/, ''));
+  const qcur = localStorage.getItem('vd_quality') || 'auto';
+  t('setqual-short', (Q_OPTS.find(q => q[0] === qcur) || Q_OPTS[0])[1]);
+  t('dlmem-n', doneListRaw().length ? doneListRaw().length + ' 条记录 ›' : '');
+  const short = document.getElementById('sd-short');   // 「我的」页设置行的摘要
+  if (short) short.textContent = cur === 'custom' ? '自定义' : opt.n.replace(/（.*）$/, '');
+}
+// 子页：文件保存位置
+function renderSetdir() {
   const cur = saveDirMode();
   const path = document.getElementById('sd-path');
   if (path) path.textContent = window.__engineDir || '';
-  const opt = SD_OPTS.find(o => o.m === cur) || SD_OPTS[0];
-  const short = document.getElementById('sd-short');
-  if (short) short.textContent = cur === 'custom' ? '自定义' : opt.n.replace(/（.*）$/, '');
   const box = document.getElementById('sd-opts');
   if (!box) return;
   box.innerHTML = SD_OPTS.map(o => {
@@ -2249,18 +2285,20 @@ function renderSettings() {
   </button>`;
   }).join('');
   document.getElementById('sd-err').style.display = 'none';
-  // 下载清晰度（从首页挪进来：默认最高往下兼容）
-  const Q_OPTS = [['auto', '最高'], ['1080', '1080P'], ['720', '720P'], ['480', '480P']];
+  renderSettings();
+}
+// 子页：下载清晰度
+function renderSetqual() {
   const qcur = localStorage.getItem('vd_quality') || 'auto';
   const qbox = document.getElementById('q-opts');
-  if (qbox) qbox.innerHTML = Q_OPTS.map(([v, n]) =>
+  if (!qbox) return;
+  qbox.innerHTML = Q_OPTS.map(([v, n]) =>
     `<button class="qc${v === qcur ? ' on' : ''}" style="flex:none;padding:7px 16px;font-size:12px;background:${v === qcur ? 'linear-gradient(135deg,var(--brand),var(--brand2))' : '#f2f4f9'};color:${v === qcur ? '#fff' : 'var(--soft)'};border:0;border-radius:999px;font-weight:500" onclick="sdQuality('${v}')">${n}</button>`).join('');
-  const mem = document.getElementById('dlmem-n');
-  if (mem) mem.textContent = doneListRaw().length ? doneListRaw().length + ' 条记录 ›' : '';
+  renderSettings();
 }
 function sdQuality(q) {
   try { localStorage.setItem('vd_quality', q); } catch (e) {}
-  renderSettings();
+  renderSetqual();
 }
 function pickSaveDir(m) {
   if (m === 'custom') { dpOpen(); return; }   // 自定义：先选文件夹再切换
@@ -2268,7 +2306,7 @@ function pickSaveDir(m) {
   const p = AndroidBridge.setSaveDir(m, '');
   if (p) {
     window.__engineDir = p;
-    renderSettings();
+    renderSetdir();
     updateStorageWarn();
     if (curView === 'lib') loadLib();
   } else {
@@ -2313,7 +2351,7 @@ function dpConfirm() {
   if (p) {
     window.__engineDir = p;
     dpClose();
-    renderSettings();
+    renderSetdir();   // 当前在保存位置子页：刷新选项；菜单摘要由 renderSetdir 内部顺带更新
     updateStorageWarn();
     if (curView === 'lib') loadLib();
   } else {
@@ -2542,7 +2580,7 @@ window.onCollected = function (payload) {
     // 图集/图文：采集到的直链在手机上直接下载（多文件，完成后可逐张查看）
     const tid = AndroidBridge.localRescue(JSON.stringify(m));
     const nImg = (m.images || []).length;
-    localTasks.push({ id: tid, url: ctx.url, quality: 'auto', title: (m.desc || '图集下载') + (nImg > 1 ? ' · ' + nImg + ' 张图' : ''), status: 'downloading', progress: 0, speed: '', file: '', filename: '', files: [], sizeMB: 0, error: '' });
+    localTasks.push({ id: tid, url: ctx.url, quality: 'auto', title: cleanTitle(m.desc || '图集下载') + (nImg > 1 ? ' · ' + nImg + ' 张图' : ''), status: 'downloading', progress: 0, speed: '', file: '', filename: '', files: [], sizeMB: 0, error: '' });
     saveLocalTasks(); renderLocalTasks();
     return;
   }
@@ -2635,8 +2673,9 @@ function lpDel(card) {
 })();
 
 // ---------- 启动 ----------
-document.getElementById('be-text').textContent = '后端：手机本地';
 render(); refreshCookies(); loadLib();
+// 源代码入口：跳 Gitee 仓库（经 shouldOverrideUrlLoading 交给系统浏览器打开）
+function openRepo() { location.href = 'https://gitee.com/zcyzzcy/downloadtool'; }
 // 自适应轮询：有进行中的任务 2 秒一次；全部空闲 15 秒一次；切到后台直接暂停（省电省流量）
 let pollTimer = null;
 function schedulePoll() {

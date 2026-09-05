@@ -431,7 +431,7 @@ public class VideoActivity extends Activity {
             float pw = Math.max(r * 2, w * frac);
             c.drawRoundRect(0, cy - r, pw, cy + r, r, r, pOn);
             float tx = Math.max(dp(6), Math.min(w - dp(6), w * frac));
-            float tr = scrub ? dp(6.5f) : dp(2.75f);
+            float tr = scrub ? dp(7) : dp(3);
             c.drawCircle(tx, cy, tr, pThumb);
             if (scrub) {
                 String t = fmt(durMs() > 0 ? (long) (frac * durMs()) : 0);
@@ -481,8 +481,8 @@ public class VideoActivity extends Activity {
         v.setTextSize(13);
         v.setGravity(Gravity.CENTER);
         v.setMinWidth(dp(56));
-        v.setPadding(dp(14), dp(7), dp(14), dp(7));
-        v.setBackgroundDrawable(glass(19));
+        v.setPadding(dp(15), dp(8), dp(15), dp(8));
+        v.setBackgroundDrawable(glass(20));
         v.setOnClickListener(l);
         return v;
     }
@@ -508,7 +508,7 @@ public class VideoActivity extends Activity {
         GradientDrawable g = new GradientDrawable();
         g.setColor(0x2EFFFFFF);
         g.setCornerRadius(dp(radiusDp));
-        g.setStroke(dp(1), 0x2EFFFFFF);
+        g.setStroke(dp(1), 0x45FFFFFF);
         return g;
     }
 
@@ -535,8 +535,8 @@ public class VideoActivity extends Activity {
         cueV = new TextView(this);
         cueV.setTextColor(0xFFFFFFFF);
         cueV.setTextSize(15);
-        cueV.setPadding(dp(22), dp(12), dp(22), dp(12));
-        cueV.setBackgroundDrawable(roundBg(0xD9141622, 24));
+        cueV.setPadding(dp(24), dp(13), dp(24), dp(13));
+        cueV.setBackgroundDrawable(roundBg(0xCC1A1D26, 26));
         cueV.setVisibility(View.GONE);
         cueV.setMaxWidth(dp(320));
         cueV.setGravity(Gravity.CENTER);
@@ -619,12 +619,12 @@ public class VideoActivity extends Activity {
         playIco = circle("", 19, 42, new View.OnClickListener() { @Override public void onClick(View v) { togglePlay(); } });
         prevB = pill("‹ 上一集", new View.OnClickListener() { @Override public void onClick(View v) { step(-1); } });
         nextB = pill("下一集 ›", new View.OnClickListener() { @Override public void onClick(View v) { step(1); } });
-        curT = white(13.5f);
+        curT = white(14);
         curT.setFontFeatureSettings("tnum");
-        durT = white(13.5f);
+        durT = white(14);
         durT.setAlpha(0.6f);
         durT.setFontFeatureSettings("tnum");
-        TextView slash = white(13.5f);
+        TextView slash = white(14);
         slash.setAlpha(0.45f);
         slash.setText("/");
         spdBtn = pill("倍速 ▾", new View.OnClickListener() { @Override public void onClick(View v) { showSpeedMenu(); } });

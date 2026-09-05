@@ -272,9 +272,9 @@ public class LocalEngine {
         } catch (Throwable ignored) {}
     }
 
-    /** 封面补齐队列：单线程逐个抽帧，不跟下载抢 CPU/IO */
+    /** 封面补齐队列：双线程抽帧（单线程时几十个存量视频要排队十几分钟，看着像"没生成"） */
     private final java.util.concurrent.ExecutorService thumbExec =
-        java.util.concurrent.Executors.newSingleThreadExecutor();
+        java.util.concurrent.Executors.newFixedThreadPool(2);
 
     /** MediaMetadataRetriever 会在个别 ROM/编码上卡死（不抛错不返回），放独立线程池并限时——
      *  卡住只废掉那一个池线程，封面队列照常推进（否则一个坏文件堵死全部封面） */

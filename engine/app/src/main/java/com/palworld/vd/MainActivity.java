@@ -868,11 +868,11 @@ public class MainActivity extends Activity {
         " return JSON.stringify({ media: { images: [...new Set(imgs)].slice(0, 40), videos: [...new Set(vids)].slice(0, 20), desc: desc.slice(0, 40) } });" +
         "} catch (e) { return JSON.stringify({ media: null }); } })()";
 
-    // 通用图集兜底（微信公众号文章 / 微博相册等）：正文图 CDN 域名 + 懒加载 data-src，
+    // 通用图集兜底（微信公众号文章 / 微博相册 / 知乎 / 快手图文 / 头条等）：正文图 CDN 域名 + 懒加载 data-src，
     // og:title 当文件名；视频只取非 blob 直链。微博缩略图路径升级成大图
     private static final String EXPR_GENERIC =
         "(() => { try {" +
-        " const hosts = /mmbiz\\.qpic\\.cn|sinaimg\\.cn|xhscdn\\.com|douyinpic|hdslb\\.com/;" +
+        " const hosts = /mmbiz\\.qpic\\.cn|sinaimg\\.cn|xhscdn\\.com|douyinpic|hdslb\\.com|zhimg|yximgs|kuaishou|gifshow|pstatp|toutiaoimg|byteimg|xiaoheihe|heybox|maxjia|skland|zizzs|aliyuncs/;" +
         " const urls = [];" +
         " for (const i of [...document.querySelectorAll('img')]) {" +
         "   const d = (i.dataset && i.dataset.src) || '';" +
@@ -932,7 +932,7 @@ public class MainActivity extends Activity {
         " for (const u of mus.slice(0, 12)) { const c = clean(u); if (out.videos.indexOf(c) < 0) out.videos.push(c); }" +
         " const ogi = meta('og:image');" +
         " if (ogi) out.images.push(clean(ogi));" +
-        " const imghosts = /sinaimg|xhscdn|mmbiz|douyinpic|hdslb|xiaoheihe|heybox|maxjia|skland|zizzs|aliyuncs/;" +
+        " const imghosts = /sinaimg|xhscdn|mmbiz|douyinpic|hdslb|xiaoheihe|heybox|maxjia|skland|zizzs|aliyuncs|zhimg|yximgs|kuaishou|gifshow|pstatp|toutiaoimg|byteimg/;" +
         " for (const i of [...document.querySelectorAll('img')]) {" +
         "   const u = i.currentSrc || i.src || '';" +
         "   if (!u || u.indexOf('blob:') === 0 || !imghosts.test(u)) continue;" +

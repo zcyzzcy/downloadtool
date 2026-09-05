@@ -346,7 +346,7 @@
       <span class="name">视频下载器</span>
     </div>
     <div class="hero">
-      <textarea id="url" placeholder="粘贴分享链接 / 磁力链接…" enterkeyhint="go"
+      <textarea id="url" placeholder="粘贴一个或多个分享链接 / 磁力链接（多链接换行分隔，批量下载）…" enterkeyhint="go"
              autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
       <div class="hero-btns">
         <button onclick="pasteGo()">📋 粘贴剪贴板</button>
@@ -385,7 +385,7 @@
         <span class="mi c6">⚙️</span>设置<span class="mv" id="sd-short"></span><span class="arw">›</span>
       </button>
       <button class="mrow" onclick="subView('about')">
-        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.32</span><span class="arw">›</span>
+        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.33</span><span class="arw">›</span>
       </button>
     </div>
   </section>
@@ -398,7 +398,7 @@
     </div>
     <div class="card" style="font-size:12.5px;color:var(--soft);line-height:2">
       <b style="color:var(--text)">视频下载器</b> · 个人自用 · 完全离线<br>
-      网页 v2.32 · App 壳 v1.33（code 34）<br>
+      网页 v2.33 · App 壳 v1.34（code 35）<br>
       解析 / 下载 / 转码全部在本机完成，无服务器、不上传任何数据
     </div>
     <div class="card" style="margin-top:12px">
@@ -711,35 +711,60 @@ window.addEventListener('popstate', e => {
   applyView((e.state && e.state.v) || 'home');
 });
 
-async function submit() {
-  const url = document.getElementById('url').value.trim();
-  if (!url) { toast('输入框是空的'); document.getElementById('url').focus(); return; }
-  if (!LOCAL_ENGINE) { toast('⏳ 本地引擎初始化中，稍候再试（首次约需几十秒）'); return; }
-  // 一切都在手机上。磁力走手机本地 aria2c BT 下载
-  if (/^magnet:/i.test(url)) {
-    const link = (url.match(/magnet:\?[^\s"']+/) || [url])[0];
-    if (isDoneUrl(link)) { doneSkipToast(); return; }
-    if (localTasks.some(t => t.url === link && !['done', 'error'].includes(t.status))) { toast('这个磁力已经在任务里了'); return; }
+// 从一段文本里提取全部链接（http/https + 磁力），去重保序——
+// 解析框支持一次粘贴多个链接（空格/换行分隔的分享文案）批量解析下载
+function extractLinks(text) {
+  const out = [], seen = new Set();
+  const push = u => { if (u && !seen.has(u)) { seen.add(u); out.push(u); } };
+  (String(text).match(/magnet:\?[^\s"']+/gi) || []).forEach(push);
+  (String(text).match(/https?:\/\/[^\s"'<>【】（）\u3000]+/gi) || []).forEach(push);
+  return out;
+}
+// 提交单个链接（submit 的核心，批量时循环调用；silent=批量模式不弹单条提示）
+// 返回 ok=已建任务 / skip=下载过自动跳过 / busy=已在任务里或采集通道忙
+function submitOne(link, silent) {
+  if (/^magnet:/i.test(link)) {
+    if (isDoneUrl(link)) { if (!silent) doneSkipToast(); return 'skip'; }
+    if (localTasks.some(t => t.url === link && !['done', 'error'].includes(t.status))) { if (!silent) toast('这个磁力已经在任务里了'); return 'busy'; }
     const id = AndroidBridge.localMagnet(link);
     localTasks.push({ id, url: link, quality: 'auto', title: '磁力：正在解析元数据…', status: 'parsing', progress: 0, speed: '', file: '', filename: '', files: [], sizeMB: 0, error: '' });
     saveLocalTasks(); renderLocalTasks();
-    document.getElementById('url').value = '';
-    return;
+    return 'ok';
   }
-  const link = (url.match(/https?:\/\/[^\s"']+/) || [url])[0];
-  if (isDoneUrl(link)) { doneSkipToast(); return; }
+  if (isDoneUrl(link)) { if (!silent) doneSkipToast(); return 'skip'; }
   const q = localStorage.getItem('vd_quality') || 'auto';
-  if (localTasks.some(t => t.url === link && !['done', 'error'].includes(t.status))) { toast('这个链接已经在任务里了'); return; }
+  if (localTasks.some(t => t.url === link && !['done', 'error'].includes(t.status))) { if (!silent) toast('这个链接已经在任务里了'); return 'busy'; }
   // 图集/图文类链接 yt-dlp 不认（只认视频）或会误判成单个视频：直接走 App 内采集，全自动下载全部图片
   const gal = IN_APP ? galleryKindOf(link) : null;
   if (gal) {
-    document.getElementById('url').value = '';
-    if (collectStart(link, gal.kind, gal.label)) return;
-    toast('采集通道忙，稍候再试'); return;
+    if (collectStart(link, gal.kind, gal.label)) return 'ok';
+    if (!silent) toast('采集通道忙，稍候再试');
+    return 'busy';
   }
-  if (/douyin/i.test(link)) { submitDouyinLocal(link, q); return; }   // 抖音先确保访问凭证新鲜
-  localSubmitUrl(link, q);
+  if (/douyin/i.test(link)) submitDouyinLocal(link, q);   // 抖音先确保访问凭证新鲜
+  else localSubmitUrl(link, q);
+  return 'ok';
+}
+async function submit() {
+  const raw = document.getElementById('url').value.trim();
+  if (!raw) { toast('输入框是空的'); document.getElementById('url').focus(); return; }
+  if (!LOCAL_ENGINE) { toast('⏳ 本地引擎初始化中，稍候再试（首次约需几十秒）'); return; }
+  const links = extractLinks(raw);
+  if (!links.length) { toast('没认出输入框里有链接'); return; }
+  if (links.length === 1) {
+    submitOne(links[0], false);
+    document.getElementById('url').value = '';
+    return;
+  }
+  // 批量：逐个提交（每个链接独立走 预路由/去重/磁力通道），统计结果
+  let ok = 0, skip = 0, busy = 0;
+  links.forEach(l => {
+    const r = submitOne(l, true);
+    if (r === 'ok') ok++; else if (r === 'skip') skip++; else busy++;
+  });
+  saveLocalTasks(); renderLocalTasks();
   document.getElementById('url').value = '';
+  toast('识别到 ' + links.length + ' 个链接：已建 ' + ok + ' 个任务' + (skip ? '，跳过已下载 ' + skip + ' 个' : '') + (busy ? '，' + busy + ' 个暂不可建（在任务里/通道忙）' : ''));
 }
 // ---------- 已下载链接记忆 v2：[{u:链接, t:标题, f:[文件名], at:时间}] ----------
 // 旧版只存 url 集合（vd_done_urls + 文件名→url 映射）：看不到标题、没法管理。
@@ -850,9 +875,8 @@ async function pasteGo() {
     return;
   }
   document.getElementById('url').value = text;
-  const m = text.match(/https?:\/\/[^\s"'<>【】（）]+/);
-  // 极致速度：剪贴板里有链接就直接开下，不用再点「解析」
-  if (m && LOCAL_ENGINE) submit();
+  // 剪贴板/分享文案里有一个或多个链接就直接批量开下，不用再点「解析」
+  if (/https?:\/\/|magnet:\?/i.test(text) && LOCAL_ENGINE) submit();
 }
 function del(id) { localRemove(id); }
 // 清空已完成任务（只删记录不删文件，文件仍在「我的保存」里）

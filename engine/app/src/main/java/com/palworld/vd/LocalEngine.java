@@ -1565,7 +1565,8 @@ public class LocalEngine {
         String u = url == null ? "" : url.trim();
         String low = u.toLowerCase();
         if (!(low.contains("://v.douyin.com") || low.contains(".iesdouyin.com") || low.contains("://iesdouyin.com")
-            || low.contains("://b23.tv") || low.contains("://xhslink.com") || low.contains("://xhslink.cn"))) return u;
+            || low.contains("://b23.tv") || low.contains("://xhslink.com") || low.contains("://xhslink.cn")
+            || low.contains("://v.kuaishou.com") || low.contains("://t.cn/") || low.contains("://v.ixigua.com"))) return u;
         String[] hit = expandCache.get(u);
         if (hit != null && System.currentTimeMillis() - Long.parseLong(hit[1]) < 600000) return hit[0];
         String r = expandOnce(u);
@@ -1589,7 +1590,9 @@ public class LocalEngine {
             boolean dy = low.contains("://v.douyin.com") || low.contains(".iesdouyin.com") || low.contains("://iesdouyin.com");
             boolean b23 = low.contains("://b23.tv");
             boolean xhs = low.contains("://xhslink.com") || low.contains("://xhslink.cn");
-            if (!dy && !b23 && !xhs) return u;
+            // 快手/微博 t.cn/西瓜短链：跟完 302 落到哪页就交哪页（yt-dlp 或采集兜底接着处理）
+            boolean gen = low.contains("://v.kuaishou.com") || low.contains("://t.cn/") || low.contains("://v.ixigua.com");
+            if (!dy && !b23 && !xhs && !gen) return u;
 
             HttpURLConnection c = (HttpURLConnection) new URL(u).openConnection();
             c.setConnectTimeout(5000);
@@ -1612,6 +1615,9 @@ public class LocalEngine {
             } else if (xhs) {
                 // 保留完整 query（?xsec_token= 小红书解析必需）
                 if (fin.contains("xiaohongshu.com/explore/") || fin.contains("xiaohongshu.com/discovery/item/")) return fin;
+            } else if (gen) {
+                // 快手/t.cn/西瓜：落到真实页面即可（没跳转=可能 200 落地页，交给采集兜底）
+                if (!fin.equals(u) && fin.startsWith("http")) return fin;
             }
 
             // 有些短链不回 302 而是回 200 落地页：读页面正文再找一遍目标链接。

@@ -1,0 +1,25 @@
+# 构建产物（依赖全走 Maven，删掉后 ./gradlew assembleRelease 可完整复现）
+engine/.gradle/
+engine/build/
+engine/app/build/
+engine/local.properties
+*.apk
+*.aab
+
+# 工具链大文件（构建不需要：Gradle 发行包 130M / 检查器 18M / yt-dlp zipapp 3M）
+tools/gradle-7.6.1/
+tools/aarcheck/
+tools/*.zipapp
+
+# 签名密钥绝不入库：泄露=任何人可给已装用户推"升级包"。
+# 本机保留在仓库根目录 vd.keystore（密码见本人记录），丢失将无法再更新已安装的 App
+vd.keystore
+
+# 系统杂物
+Thumbs.db
+.DS_Store
+__pycache__/
+
+# 模拟器测试遗留（本机模拟器已禁用，改真机验证；日志不入库）
+test-shots/
+emulator-test.sh

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 保存目录的落点：下载/vd（默认）、应用私有目录、用户自选的任意目录（root-path 兜底全覆盖，
+     个人自用 App 不介意；否则自定义目录里的文件没法授权给系统播放器打开） -->
+<paths>
+    <external-path name="vd_public" path="Download/vd" />
+    <external-path name="vd_ext" path="." />
+    <root-path name="vd_root" path="." />
+    <external-files-path name="vd_private" path="vd" />
+</paths>

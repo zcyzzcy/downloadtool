@@ -141,6 +141,7 @@
   .mcard .mtags { font-size:11px; color:var(--brand-deep); opacity:.8; margin-top:3px; line-height:1.45; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; word-break:break-all; }
   /* 类型徽标：视频·时长 / 图片 / 图集·N张 / 图文 */
   .mcard .tbadge { display:inline-block; padding:1.5px 7px; border-radius:7px; background:#eaf0ff; color:var(--brand-deep); font-size:10.5px; font-weight:600; margin-right:6px; vertical-align:1px; }
+  .mcard .tbadge.pbadge { background:#e8f7ef; color:#1f9d63; }   /* 平台徽标（v2.42）：绿色系，和类型徽标一眼区分 */
   /* 来源链接行：一行放不下省略号，点一下复制 */
   .mcard .murl { font-size:10.5px; color:var(--muted); opacity:.75; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
   /* 播放页（=详情页）第二行：#话题（@提及不显示） */
@@ -384,7 +385,7 @@
         <span class="mi c6">⚙️</span>设置<span class="mv" id="sd-short"></span><span class="arw">›</span>
       </button>
       <button class="mrow" onclick="subView('about')">
-        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.40</span><span class="arw">›</span>
+        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.42</span><span class="arw">›</span>
       </button>
     </div>
   </section>
@@ -398,7 +399,7 @@
     <div class="card" style="font-size:12.5px;color:var(--soft);line-height:2">
       纯离线单机版视频/图集下载器：抖音、B站、微博、小红书等站点的视频、图集与磁力下载，
       解析 / 下载 / 转码全部在本机完成——无服务器、不上传任何数据。<br>
-      网页 v2.40 · App 壳 v1.41（code 43）
+      网页 v2.42 · App 壳 v1.42（code 44）
     </div>
     <div class="menu" style="margin-top:12px">
       <button class="mrow" onclick="subView('src')">
@@ -969,27 +970,27 @@ function typeBadge(t, imgs, vids) {
   if (vids.length > 1) return '视频 · ' + vids.length + ' 集';
   return '视频' + (t && t.dur ? ' · ' + fmtDur(t.dur) : '');
 }
-// 已完成任务行（v2.38 统一格式）：所有类型一个样 —— 封面框 + 标题 + #话题行 + 类型徽标/大小 + 来源链接
+// 来源平台（v2.42）：首页卡片直接复用 1318 行的 platformOf（链接→平台显示名，认不出显示域名）
+// 已完成任务行（v2.42 纯文字版）：不再放缩略图 —— 标题 / #话题 / 平台·类型·大小 / 来源链接，
+// 点击整条进详情（视频→播放详情页，图集/图片→预览）；平台+类型都在徽标行里一眼可辨
 function doneRow(t) {
   const files = (t.files && t.files.length) ? t.files : [t.filename];
-  const tn = t.filename || files.filter(Boolean)[0] || safeName(t.file);
   const multi = files.length > 1;
   const imgs = files.filter(isImgName);
   const vids = files.filter(f => !isImgName(f));
   const sel = homeSel.has(t.id);
   const badge = typeBadge(t, imgs, vids);
+  const plat = platformOf(t.url);
   const tags = tagLine(t.raw || t.title || '');
   const chips = multi ? `<span class="mchips">${files.map((f, i) =>
     `<a class="dl" href="javascript:void(0)" title="${esc(f)}" onclick="event.stopPropagation();previewTaskAt('${t.id}',${i})">${i + 1}</a>`).join('')}</span>` : '';
-  const thumb = imgs.length ? thumbBox(imgs[0]) : thumbBox(tn);   // 图集也用第一张图当封面，格式与视频一致
   return `<div class="mcard${sel ? ' sel' : ''}" onclick="homeCardClick('${t.id}')">
     <span class="msel">${sel ? '✓' : ''}</span>
-    ${thumb}
     <span class="mt">
       <span class="mn">${esc(t.title || t.filename)}</span>
       ${tags ? `<span class="mtags">${esc(tags)}</span>` : ''}
       ${chips}
-      <span class="mm"><span class="tbadge">${esc(badge)}</span>${t.sizeMB ? esc(String(t.sizeMB)) + ' MB' : ''}</span>
+      <span class="mm">${plat ? `<span class="tbadge pbadge">${esc(plat)}</span>` : ''}<span class="tbadge">${esc(badge)}</span>${t.sizeMB ? esc(String(t.sizeMB)) + ' MB' : ''}</span>
       ${t.url ? `<span class="murl" title="${esc(t.url)}" onclick="event.stopPropagation();copyText(this.title)">${esc(t.url)}</span>` : ''}
       <span class="tacts">
         <button class="del" onclick="event.stopPropagation();del('${t.id}')">✕ 移除</button>
@@ -1297,15 +1298,18 @@ let memItems = [];
 let memSearchT = 0;
 function memSearchDeb() { clearTimeout(memSearchT); memSearchT = setTimeout(renderMem, 250); }
 function hostOf(u) { try { return new URL(u).host; } catch (e) { return String(u || '').slice(0, 32); } }
-// 链接 → 平台显示名（认不出的显示域名）
+// 链接 → 平台显示名（认不出的显示域名）。v2.42 起首页任务卡片也用它做平台徽标
 function platformOf(u) {
   const s = String(u || '').toLowerCase();
   const m = [
-    ['douyin', '抖音'], ['bilibili', 'B站'], ['b23.tv', 'B站'], ['weibo', '微博'], ['t.cn', '微博'],
-    ['xiaohongshu', '小红书'], ['xhslink', '小红书'], ['miyoushe', '米游社'], ['mihoyo', '米游社'],
-    ['kurobbs', '库街区'], ['kurogame', '库街区'], ['xiaoheihe', '小黑盒'], ['heybox', '小黑盒'],
-    ['skland', '森空岛'], ['kuaishou', '快手'], ['mp.weixin', '微信公众号'], ['zhihu', '知乎'],
-    ['ixigua', '西瓜'], ['b23', 'B站'], ['magnet:', '磁力'],
+    ['douyin', '抖音'], ['iesdouyin', '抖音'], ['bilibili', 'B站'], ['b23.tv', 'B站'], ['b23', 'B站'],
+    ['bilivideo', 'B站'], ['weibo', '微博'], ['t.cn', '微博'], ['xiaohongshu', '小红书'],
+    ['xhslink', '小红书'], ['miyoushe', '米游社'], ['mihoyo', '米游社'], ['kurobbs', '库街区'],
+    ['kurogame', '库街区'], ['xiaoheihe', '小黑盒'], ['heybox', '小黑盒'], ['skland', '森空岛'],
+    ['kuaishou', '快手'], ['chenzhongtech', '快手'], ['ksurl', '快手'], ['mp.weixin', '微信公众号'],
+    ['zhihu', '知乎'], ['ixigua', '西瓜'], ['tiktok', 'TikTok'], ['youtube', 'YouTube'],
+    ['youtu.be', 'YouTube'], ['pixiv', 'Pixiv'], ['instagram', 'Instagram'], ['weishi', '微视'],
+    ['magnet:', '磁力'],
   ];
   for (const it of m) if (s.indexOf(it[0]) >= 0) return it[1];
   return hostOf(u);
@@ -1569,28 +1573,53 @@ function showBarMark(t) {
 }
 /** 有声无画兜底：HEVC 等，文件没坏，本页的 WebView 解不出画面 */
 function noVideoBad(on) { const el = document.getElementById('pnov'); if (el) el.style.display = on ? 'flex' : 'none'; }
-/** 有声无画检测（v1.39 加强）：播放中画面宽=0，或声音在走但解码帧数为 0（HEVC 的典型表现——
- *  1.37 版只查画面宽，HEVC 容器里有视频轨所以宽>0，黑屏漏检，这版补上解码帧数） */
-function hevcCheck(delay) {
-  setTimeout(() => {
-    try {
-      if (curView !== 'player' || isImgName(curPlName) || !plSet.length) return;
-      const v = document.getElementById('player-video');
-      if (v.paused || v.currentTime < 0.3) return;
-      let frames = -1;
-      try {
-        const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
-        frames = q ? (q.totalVideoFrames || 0) : (v.webkitDecodedFrameCount || 0);
-      } catch (e) { frames = -1; }
-      if (v.videoWidth === 0 || frames === 0) hevcFail();
-    } catch (e) {}
-  }, delay);
+/** 有声无画检测（v2.42 重写）：常驻轮询，三路信号任一命中就自救——
+ *  ① 画面宽=0（容器里没解析出视频轨）；
+ *  ② 解码帧数持续为 0（1.5 秒内都在 0 且播放时间在走）；
+ *  ③ 画布采样持续全黑（有的 ROM WebView 会谎报帧数，画布像素骗不了人；
+ *     跨源读不到像素时此路自动弃用，不影响前两路）。
+ *  1.41 的毛病是只在上帧后单点采样一两次，条件不满足就永远不再查——用户手机上
+ *  进度条一直走、什么提示都不弹就是这个漏检；这版改成播放期间一直盯着 */
+let __fr0 = null, __blk0 = null;
+const __blkCv = document.createElement('canvas'); __blkCv.width = 16; __blkCv.height = 9;
+function frameIsBlack(v) {
+  try {
+    const cx = __blkCv.getContext('2d', { willReadFrequently: true });
+    cx.drawImage(v, 0, 0, 16, 9);
+    const d = cx.getImageData(0, 0, 16, 9).data;   // 跨源污染会在这里抛 → 返回 null 弃用此路
+    let s = 0;
+    for (let i = 0; i < d.length; i += 4) s += d[i] + d[i + 1] + d[i + 2];
+    return s < 6912;   // 144 像素平均亮度 <16：解不出画面时画布就是纯黑
+  } catch (e) { return null; }
 }
+setInterval(function frameWatch() {
+  try {
+    if (curView !== 'player' || isImgName(curPlName) || !plSet.length) { __fr0 = null; __blk0 = null; return; }
+    const v = document.getElementById('player-video');
+    if (!v || v.paused || v.currentTime < 0.3 || v.readyState < 2 || v.videoWidth === 0) {
+      if (v && v.videoWidth === 0 && !v.paused && v.currentTime >= 0.3) hevcFail();   // 宽=0 直接判
+      return;
+    }
+    let frames = -1;
+    try {
+      const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
+      frames = q ? (q.totalVideoFrames || 0) : (v.webkitDecodedFrameCount || 0);
+    } catch (e) { frames = -1; }
+    if (frames === 0) {
+      if (__fr0 === null) __fr0 = { t: v.currentTime, at: Date.now() };
+      else if (Date.now() - __fr0.at >= 1500 && v.currentTime > __fr0.t + 0.4) { hevcFail(); return; }
+    } else __fr0 = null;
+    const blk = frameIsBlack(v);
+    if (blk === true) {
+      if (__blk0 === null) __blk0 = { t: v.currentTime, at: Date.now() };
+      else if (Date.now() - __blk0.at >= 2400 && v.currentTime > __blk0.t + 0.6) { hevcFail(); return; }
+    } else __blk0 = null;
+  } catch (e) {}
+}, 500);
 /** 确认本页解不了画面（HEVC 等）：页内自救——手机上转成 H.264 后原地重播。
  *  不再自动跳全屏原生播放（体验割裂），转码失败才把面板摆出来给系统播放器兜底 */
 function hevcFail() {
-  noVideoBad(true);
-  if (window.__hevcSw) return;
+  if (window.__hevcSw) { noVideoBad(true); return; }   // 这文件已自救过一轮：直接摆面板说明
   window.__hevcSw = 1;
   const name = plSet[plIdx];
   if (IN_APP && name && !isImgName(name) && bridgeOk('localTranscode') && window.__tcFrom !== name) {
@@ -1601,14 +1630,15 @@ function hevcFail() {
     window.__tcFrom = name;
     try { AndroidBridge.localTranscode(name); return; } catch (e) {}
   }
-  if (window.__tcFrom === name) noVideoBad(true);   // 转过一次还不行：只留面板说明
+  noVideoBad(true);   // 转不动（极端情况）：面板上留"用系统播放器打开"
 }
-// 引擎转码完成回调：换源原地重播，顺带把任务记录里的旧文件名替换掉
+// 引擎转码完成回调：换源原地重播，顺带把任务记录里的旧文件名替换掉。
+// v2.42：转码失败（返回的还是原文件名）不再假报"转换完成"，直接摆系统播放器面板
 window.onTranscoded = function (name, ok) {
   cueOff();
   if (curView !== 'player' || isImgName(curPlName)) return;
   const old = window.__tcFrom;
-  if (ok && name && old) {
+  if (ok && name && old && name !== old) {
     const i = plSet.indexOf(old);
     if (i >= 0) plSet[i] = name;
     localTasks.forEach(t => {
@@ -1622,6 +1652,7 @@ window.onTranscoded = function (name, ok) {
     showPlFile();
     cue('转换完成，继续播放', false, 1600);
   } else {
+    window.__hevcSw = 1;
     noVideoBad(true);   // 转不动（极端情况）：面板上留"用系统播放器打开"
   }
 };
@@ -1765,7 +1796,7 @@ function closePlayer() { if (curView === 'player') leavePlayer(); }
     }
     hevcFail();
   });
-  v.addEventListener('playing', () => { cueOff(); hevcCheck(1600); hevcCheck(4200); });
+  v.addEventListener('playing', () => { cueOff(); });   // 黑屏检测由 v2.42 的常驻轮询接管，不再单点采样
   v.addEventListener('canplay', cueOff);
   v.addEventListener('ended', () => { // 看完：清除记忆，下次从头播
     document.getElementById('pp-toggle').classList.remove('pausing');

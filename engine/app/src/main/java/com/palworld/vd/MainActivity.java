@@ -87,6 +87,10 @@ public class MainActivity extends Activity {
         // file:// 走系统文件通道，seek/拖进度条天然可用。API 30+ 默认禁 file://，必须显式开
         s.setAllowFileAccess(true);
         s.setAllowFileAccessFromFileURLs(true);
+        // v2.42 黑屏检测要往 <canvas> 里 drawImage(file://视频) 再 getImageData 读像素（有的 ROM
+        // WebView 会谎报解码帧数，画布像素不会说谎）——不放开跨源读，getImageData 会抛安全异常，
+        // 这路检测就永远处于弃用状态。App 只读自家引擎目录，不构成额外暴露面
+        s.setAllowUniversalAccessFromFileURLs(true);
 
         // ---------- 本地引擎（解析+下载全部在手机上） ----------
         engine = new LocalEngine(this, new LocalEngine.Listener() {            @Override

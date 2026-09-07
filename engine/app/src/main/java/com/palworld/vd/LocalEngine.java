@@ -533,6 +533,12 @@ public class LocalEngine {
                 ok = out.isFile() && out.length() > 0;
             }
             if (ok) {
+                // v2.42 产物验证：ffmpeg 退出≠产出合规（个别 ROM 上半途而废也能留下非空文件），
+                // 转完再 probe 一次，视频轨不是 h264/mpeg4 就当失败——绝不能拿一个"转了但没转对"
+                // 的文件冒充 H.264 交给页面（黑屏会更难排查）
+                String[] q = probeMedia(out.getAbsolutePath());
+                String nvc = q != null ? q[0] : "";
+                if (!"h264".equals(nvc) && !"mpeg4".equals(nvc)) { out.delete(); return name; }
                 // 先挪成功再删原文件：挪失败时原视频还在
                 if (out.renameTo(new File(vdDir, outName))) { in.delete(); return outName; }
                 out.delete();
@@ -566,9 +572,10 @@ public class LocalEngine {
         return args;
     }
 
-    /** 抖音片尾推广自动裁剪（v1.39）：抖音直链视频常在正片后拼一段"类广告"尾巴。
-     *  ① API 时长已知 → 文件比它多出来的就是尾巴，精确切；
-     *  ② 拿不到 API 时长 → 抽尾部 ~12 秒灰度小帧，找"硬切边界 + 之后画面基本不动"的静态卡片。
+    /** 抖音片尾推广自动裁剪（v2.42 三重判定）：抖音直链视频常在正片后拼一段"博主名片"尾巴。
+     *  ① API 时长已知 → 文件比它多出来的就是尾巴，精确切（窗口放宽到 0.8~20 秒）；
+     *  ② 尾部静态卡片检测（名片常常有轻动画，v2.42 放宽了"之后不动"的阈值）；
+     *  ③ 尾部静音检测（名片基本没人声/BGM 收尾）：最后一段 ≥1.2 秒的静音一路铺到片尾 → 从静音起点切。
      *  判不出/切不动都原样返回名，原文件绝不丢 */
     private String trimDouyinTail(final String name, final String id, long apiDurMs) {
         try {
@@ -580,11 +587,11 @@ public class LocalEngine {
             if (durSec < 15 || durSec > 1200) return name;   // 太短没尾巴可言，太长检测窗口没意义
             double cut = 0;
             double api = apiDurMs / 1000.0;
-            if (api >= 3 && durSec - api >= 1.2 && durSec - api <= 15) {
+            if (api >= 3 && durSec - api >= 0.8 && durSec - api <= 20) {
                 cut = api + 0.12;   // 正片时长已知：多出来的整段都是尾巴
-            } else {
-                cut = detectStaticTail(in, durSec);   // 兜底：内容检测
             }
+            if (cut <= 1) cut = detectStaticTail(in, durSec);   // 兜底一：内容检测
+            if (cut <= 1) cut = detectSilenceTail(in, durSec);  // 兜底二：片尾静音
             if (cut <= 1 || cut >= durSec - 0.8) return name;
             dPostState(id, "merging", "正在裁掉片尾推广…", null, null);
             File out = new File(vdDir, ".tmp-trim-" + id + ".mp4");
@@ -684,14 +691,16 @@ public class LocalEngine {
                 for (int j = 0; j < FS; j++) acc += Math.abs((b[i * FS + j] & 0xFF) - (b[(i + 1) * FS + j] & 0xFF));
                 d[i] = acc / (double) FS;
             }
-            // 从后往前找边界：d[bd] 是硬切（大），其后全部近似静止（小）；静止段 ≥1.5 秒（3 帧）才算尾巴
+            // 从后往前找边界：d[bd] 是硬切（大），其后全部近似静止（小）。
+            // v2.42 阈值放宽（v1.39 的 ≥14/≤3.5 在名片带轻动画/渐变时整段判不出）：
+            // 硬切 ≥11、边界后帧差 ≤5.5、尾巴 1.2~12 秒
             for (int bd = n - 5; bd >= 0; bd--) {
-                if (d[bd] < 14) continue;
+                if (d[bd] < 11) continue;
                 boolean calm = true;
-                for (int j = bd + 1; j < n - 1; j++) if (d[j] > 3.5) { calm = false; break; }
+                for (int j = bd + 1; j < n - 1; j++) if (d[j] > 5.5) { calm = false; break; }
                 if (!calm) continue;
                 double tail = (n - 2 - bd) * 0.5;   // 边界后每帧 0.5 秒
-                if (tail < 1.5 || tail > 12) continue;
+                if (tail < 1.2 || tail > 12) continue;
                 return start + (bd + 1) * 0.5 - 0.2;
             }
             return 0;
@@ -699,6 +708,58 @@ public class LocalEngine {
             return 0;
         } finally {
             if (raw != null) { try { raw.delete(); } catch (Throwable ignored) {} }
+        }
+    }
+
+    /** 片尾静音检测（v2.42 第三重）：抖音名片尾巴基本没人声、BGM 也收掉。
+     *  对最后 ~16 秒跑 silencedetect，若最后一段 ≥1.2 秒的静音一路铺到片尾，从静音起点切。
+     *  返回应保留的秒数；判不出返回 0 */
+    private double detectSilenceTail(File in, long durSec) {
+        try {
+            double win = 16.0;
+            if (durSec <= win + 4) win = Math.max(5.0, durSec / 2);
+            double start = Math.max(0, durSec - win - 0.4);
+            List<String> args = new ArrayList<>();
+            args.add("-hide_banner");
+            args.add("-ss");
+            args.add(String.format(java.util.Locale.US, "%.2f", start));
+            args.add("-i");
+            args.add(in.getAbsolutePath());
+            args.add("-t");
+            args.add(String.valueOf((int) Math.ceil(win + 1)));
+            args.add("-af");
+            args.add("silencedetect=noise=-35dB:d=1.2");
+            args.add("-f");
+            args.add("null");
+            args.add("-");
+            String out = runFfmpeg(args, 60000);
+            if (out == null || out.isEmpty()) return 0;
+            // 解析成对的 silence_start/silence_end：要"贴着片尾结束"的那一段
+            java.util.regex.Matcher ms = java.util.regex.Pattern.compile(
+                "silence_start: ([0-9.]+)").matcher(out);
+            java.util.regex.Matcher me = java.util.regex.Pattern.compile(
+                "silence_end: ([0-9.]+)").matcher(out);
+            java.util.List<double[]> spans = new java.util.ArrayList<>();
+            java.util.List<Double> ss = new java.util.ArrayList<>();
+            while (ms.find()) ss.add(Double.parseDouble(ms.group(1)));
+            java.util.List<Double> se = new java.util.ArrayList<>();
+            while (me.find()) se.add(Double.parseDouble(me.group(1)));
+            for (int i = 0; i < ss.size(); i++) {
+                double a = ss.get(i);
+                double b = i < se.size() ? se.get(i) : (start + win + 1);   // 有始无终：静音一直到截尾
+                spans.add(new double[]{ a, b });
+            }
+            if (spans.isEmpty()) return 0;
+            double[] last = spans.get(spans.size() - 1);
+            double winEnd = start + win + 1;
+            // 最后一段静音要覆盖到窗口末尾（= 覆盖到文件末尾）且长度 ≥1.2 秒
+            if (last[1] >= winEnd - 0.8 && last[1] - last[0] >= 1.2 && last[0] >= start + 0.5) {
+                double cut = start + last[0] + 0.15;   // -ss 在 -i 前，silencedetect 的时间轴从窗口起点重算，加回偏移；留 0.15 秒余量别切到正片收尾的声音
+                if (cut >= 3 && cut < durSec - 0.8) return cut;
+            }
+            return 0;
+        } catch (Throwable t) {
+            return 0;
         }
     }
 

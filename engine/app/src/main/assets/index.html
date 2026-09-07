@@ -402,7 +402,7 @@
         <span class="mi c4">🔗</span>已下载链接记忆<span class="mv" id="dlmem-n"></span><span class="arw">›</span>
       </button>
       <button class="mrow" onclick="subView('about')">
-        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.45</span><span class="arw">›</span>
+        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.46</span><span class="arw">›</span>
       </button>
     </div>
   </section>
@@ -416,7 +416,7 @@
     <div class="card" style="font-size:12.5px;color:var(--soft);line-height:2">
       纯离线单机版视频/图集下载器：抖音、B站、微博、小红书等站点的视频、图集与磁力下载，
       解析 / 下载 / 转码全部在本机完成——无服务器、不上传任何数据。<br>
-      网页 v2.45 · App 壳 v1.45（code 47）
+      网页 v2.46 · App 壳 v1.46（code 48）
     </div>
     <div class="menu" style="margin-top:12px">
       <button class="mrow" onclick="subView('src')">
@@ -964,7 +964,8 @@ function clearDone() {
 
 // ---------- 任务列表（全部来自手机本地引擎） ----------
 function previewTask(id) { previewTaskAt(id, 0); }
-// 批量删记录模式下的整卡点击 = 勾选/取消；平时照旧打开预览
+// v2.46：首页只有「成功/失败」两种终态——不再有"文件不在了"第三态。
+// 成功的记录（不管自愈有没有找到文件）点击直接跳「我的保存」，文件在那边看
 function homeCardClick(id) {
   if (hManage) {
     if (homeSel.has(id)) homeSel.delete(id); else homeSel.add(id);
@@ -972,7 +973,8 @@ function homeCardClick(id) {
     mgBarSync();
     return;
   }
-  previewTask(id);
+  const t = localTaskById(id);
+  if (t && t.status === 'done') { showView('lib'); loadLib(); return; }
 }
 // 多文件任务（图集/多视频）的序号小方块：直接跳到对应文件播放
 function previewTaskAt(id, idx) {
@@ -992,14 +994,14 @@ function typeBadge(t, imgs, vids) {
   return '视频' + (t && t.dur ? ' · ' + fmtDur(t.dur) : '');
 }
 // 来源平台（v2.42）：首页卡片直接复用 1318 行的 platformOf（链接→平台显示名，认不出显示域名）
-// 已完成任务行（v2.43）：纯文字 —— 标题 / #话题 / 平台·类型·大小；不放缩略图、不放链接、
-// 不放 1234 序号（图集/多视频整条点进去看）；「✕ 移除」挪到卡片右上角，红叉更醒目
+// 已完成任务行（v2.46）：只要任务成功就是这个样子（自愈在后台默默补文件对应关系，
+// 补没补上都不影响展示——点击跳「我的保存」）。纯文字：标题/#话题/平台·类型·大小；✕ 移除在右上角
 function doneRow(t) {
-  const files = (t.files && t.files.length) ? t.files : [t.filename];
+  const files = (t.files && t.files.length) ? t.files : (t.filename ? [t.filename] : []);
   const imgs = files.filter(isImgName);
   const vids = files.filter(f => !isImgName(f));
   const sel = homeSel.has(t.id);
-  const badge = typeBadge(t, imgs, vids);
+  const badge = files.length ? typeBadge(t, imgs, vids) : '已完成';
   const plat = platformOf(t.url);
   const tags = tagLine(t.raw || t.title || '');
   return `<div class="mcard${sel ? ' sel' : ''}" onclick="homeCardClick('${t.id}')">
@@ -1124,7 +1126,7 @@ function renderLib() {
       const mt = Math.max(...r.items.map(i => i.mtime));
       return `<div class="hrow${allSel ? ' sel' : ''}" data-gidx="${idx}" onclick="openLibRow(${idx})">
         <span class="msel">${allSel ? '✓' : ''}</span>
-        ${gminiHtml(r)}
+        ${thumbBox(r.items[0].name, 1)}
         <span class="ht">
           <span class="hn" title="${esc(r.gkey)}">${esc(cleanTitle(r.gkey) || r.gkey)}<span style="color:var(--brand-deep);font-weight:600"> · ${r.isImg ? '图集' : '合集'}</span></span>
           <span class="hm">${fmtDate(mt)} · ${r.isImg ? r.items.length + ' 张图' : r.items.length + ' 个视频'} · ${totalMB} MB</span>
@@ -1713,8 +1715,12 @@ window.onTranscoded = function (name, ok) {
     showPlFile();
     cue('转换完成，继续播放', false, 1600);
   } else {
+    // v2.46：转码失败（手机上转码引擎跑不动/转出来的还是解不了）——不再干等黑屏，
+    // 提示一下直接切系统播放器（用户手机上系统解码器是能播的，别让黑屏再出现）
     window.__hevcSw = 1;
-    noVideoBad(true);   // 转不动（极端情况）：面板上留"用系统播放器打开"
+    noVideoBad(false);
+    cue('这个视频本页播不了，已切换系统播放器', false, 1600);
+    setTimeout(() => { if (curView === 'player' && plSet[plIdx] === (window.__tcFrom || curPlName)) nativeFullscreenP(); }, 900);
   }
 };
 // HUD 显隐：播放中 3.5 秒自动藏；暂停/图片常显
@@ -2556,7 +2562,7 @@ let healing = false;
 function renderLocalTasks() {
   const box = document.getElementById('list');
   healDoneTasks();   // 自愈：无文件/单张图集的已完成记录，先补齐再渲染
-  const doneN = localTasks.filter(t => t.status === 'done' && t.file).length;
+  const doneN = localTasks.filter(t => t.status === 'done').length;
   document.getElementById('home-ops').style.display = doneN ? 'flex' : 'none';
   document.getElementById('home-done-n').textContent = hManage ? ('已选 ' + homeSel.size + ' 条记录') : (doneN + ' 个已完成任务');
   box.classList.toggle('manage', hManage);
@@ -2565,7 +2571,7 @@ function renderLocalTasks() {
     return;
   }
   box.innerHTML = localTasks.slice().reverse().map(t => {
-    if (t.status === 'done' && t.file) return doneRow(t);
+    if (t.status === 'done') return doneRow(t);   // v2.46：成功的任务一律正常卡片（有没有文件都跳「我的保存」）
     const pct = t.status === 'done' ? 100 : (t.progress || 0);
     const stat = STATUS[t.status] || t.status;
     const info = stat; // 速度等数字信息在进度条下方的数字行（progLine）
@@ -2580,9 +2586,7 @@ function renderLocalTasks() {
     const canLogin = loginSite && /login|登录|sign in|cookie|风控|封|429|credential|expire/i.test(t.error || '');
     const meta = t.status === 'error'
       ? `<div class="err">${esc(t.error)}</div><div class="meta"><span>${canCollect ? `<a class="dl" href="javascript:void(0)" onclick="appCollect('${t.id}')">📱 在App内采集</a>` : ''}${canLogin ? `<a class="dl" href="javascript:void(0)" onclick="startLogin('${loginSite}')">🔑 去登录</a>` : ''}<a class="dl" href="javascript:void(0)" onclick="localRetry('${t.id}')">↻ 重试</a></span><button class="del" onclick="localRemove('${t.id}')">移除</button></div>`
-      : t.status === 'done'
-        ? `<div class="meta"><span>文件不在了（可能被清理）<a class="dl" href="javascript:void(0)" onclick="localRetry('${t.id}')">↻ 重新下载</a></span><button class="del" onclick="localRemove('${t.id}')">移除</button></div>`
-        : `<div class="meta"><span class="u">${esc(t.url)}</span><button class="del" onclick="localCancel('${t.id}')">取消</button></div>`;
+      : `<div class="meta"><span class="u">${esc(t.url)}</span><button class="del" onclick="localCancel('${t.id}')">取消</button></div>`;
     return `<div class="card ${esc(t.status)}">
       <div class="row1"><div class="title" title="${esc(t.title)}">${esc(t.title)}</div><div class="status">${info}</div></div>
       <div class="bar"><div class="fill" style="width:${pct}%"></div></div>

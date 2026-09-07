@@ -11,8 +11,8 @@ android {
         applicationId "com.palworld.vd"
         minSdk 24
         targetSdk 34
-        versionCode 47
-        versionName "1.45"
+        versionCode 48
+        versionName "1.46"
         // 只保留 arm64：近 8 年的手机全是 64 位，省掉整份 32 位引擎约 47MB
         ndk { abiFilters 'arm64-v8a' }
     }

@@ -783,10 +783,10 @@ public class VideoActivity extends Activity {
     private final Runnable hideHudR = new Runnable() { @Override public void run() { hideHud(); } };
 
     private void hideHud() {
+        // v2.46：底栏（进度条+按钮）常驻不藏——之前底栏跟着 3.5 秒自动隐藏，藏掉之后画面里
+        // 随便一条亮线都被当成"进度条跑到顶上去了"。现在只有顶栏自动隐藏，进度条永远在底部可见
         topBar.animate().alpha(0f).translationY(-dp(64)).setDuration(220)
             .withEndAction(new Runnable() { @Override public void run() { topBar.setVisibility(View.GONE); } });
-        botBar.animate().alpha(0f).translationY(dp(96)).setDuration(220)
-            .withEndAction(new Runnable() { @Override public void run() { botBar.setVisibility(View.GONE); } });
         immersive();
     }
 

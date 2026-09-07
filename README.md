@@ -1,6 +1,6 @@
 # 视频下载器（downloadtool）
 
-纯离线单机版 Android 视频下载器。包名 `com.palworld.vd`，当前版本 **1.44（versionCode 42，页面 v2.39）**。
+纯离线单机版 Android 视频下载器。包名 `com.palworld.vd`，当前版本 **1.45（versionCode 42，页面 v2.39）**。
 
 ## 架构
 

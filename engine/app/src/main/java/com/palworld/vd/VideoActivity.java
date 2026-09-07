@@ -497,8 +497,10 @@ public class VideoActivity extends Activity {
 
         PBar(android.content.Context c) {
             super(c);
-            pTrack.setColor(0x2EFFFFFF);
-            pBuf.setColor(0x59FFFFFF);
+            // v2.45：轨道加亮加粗——之前未播段只有 18% 透明度，整条看着就是一根白线，
+            // 跟视频画面里自带的装饰线分不清（用户把画面里的线当成了进度条）
+            pTrack.setColor(0x4DFFFFFF);
+            pBuf.setColor(0x73FFFFFF);
             pOn.setColor(0xFFFFFFFF);
             pThumb.setColor(0xFFFFFFFF);
             pBub.setColor(0xE6141622);
@@ -521,7 +523,7 @@ public class VideoActivity extends Activity {
             float pw = Math.max(r * 2, w * frac);
             c.drawRoundRect(0, cy - r, pw, cy + r, r, r, pOn);
             float tx = Math.max(dp(6), Math.min(w - dp(6), w * frac));
-            float tr = scrub ? dp(7) : dp(3);
+            float tr = scrub ? dp(7) : dp(4.5f);   /* v2.45：常态也带明显圆点，一眼认出这是进度条 */
             c.drawCircle(tx, cy, tr, pThumb);
             if (scrub) {
                 String t = fmt(durMs() > 0 ? (long) (frac * durMs()) : 0);

@@ -17,9 +17,11 @@
 cd engine
 gradle assembleRelease -x lintVitalRelease
 
-# 签名（zipalign 后；keystore 不在本仓库，密码本人记录）
+# 签名（zipalign 后）。keystore 不在本仓库——密码不能进 git，所以不写在命令里：
+# 不带 --ks-pass 参数，apksigner 会交互式询问（密钥库口令 + 密钥口令，本人在手机备忘/密码管理器里自存）
 zipalign -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk out.apk
-apksigner sign --ks vd.keystore --ks-pass pass:*** out.apk
+apksigner sign --ks vd.keystore --ks-key-alias vd out.apk
+# 注意：必须用同一把 vd.keystore 签名才能覆盖升级（签名变了系统会拒绝安装），keystore 丢失 = 无法再更新已装的 App
 ```
 
 仅 `arm64-v8a`（近 8 年手机全是 64 位）。内置 yt-dlp 版本更新：换 `tools/` 下的 zipapp 后按 youtubedl-android 的方式重打包（参考官方文档）。

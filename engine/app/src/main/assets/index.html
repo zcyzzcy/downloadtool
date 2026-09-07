@@ -384,7 +384,7 @@
         <span class="mi c6">⚙️</span>设置<span class="mv" id="sd-short"></span><span class="arw">›</span>
       </button>
       <button class="mrow" onclick="subView('about')">
-        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.39</span><span class="arw">›</span>
+        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.40</span><span class="arw">›</span>
       </button>
     </div>
   </section>
@@ -398,7 +398,7 @@
     <div class="card" style="font-size:12.5px;color:var(--soft);line-height:2">
       纯离线单机版视频/图集下载器：抖音、B站、微博、小红书等站点的视频、图集与磁力下载，
       解析 / 下载 / 转码全部在本机完成——无服务器、不上传任何数据。<br>
-      网页 v2.39 · App 壳 v1.40（code 42）
+      网页 v2.40 · App 壳 v1.41（code 43）
     </div>
     <div class="menu" style="margin-top:12px">
       <button class="mrow" onclick="subView('src')">
@@ -1444,6 +1444,7 @@ function showPlFile() {
   noVideoBad(false);
   window.__hevcSw = 0;   // 新文件重置"有声无画"自动切换标记
   window.__tcFrom = null;   // 新文件重置转码来源（防同一文件反复转）
+  window.__srcFb = 0;   // 新文件重置"file:// 退虚拟域"标记
   const u = fileUrl(name);
   // 单文件任务带标题就用任务标题（多文件让位给文件名，序号在第二行信息里）
   const disp = (plSet.length === 1 && window.__plTitle) ? window.__plTitle
@@ -1752,10 +1753,16 @@ function closePlayer() { if (curView === 'player') leavePlayer(); }
   v.addEventListener('waiting', () => { if (!ppSeeking) cue('加载中…', true, 0); });
   // 原生视频全屏退出（返回键/系统按钮）= 回到播放页内继续播（详情在下方），不关播放页
   v.addEventListener('webkitendfullscreen', () => { if (curView === 'player') showHud(); });
-  // 有声无画兜底（v1.39）：解码报错 / 画面宽=0 / 声音在走但一帧都没解出来（HEVC 典型表现）
-  // → 说明面板 + App 内自动切原生播放器，不用用户手动救
+  // 加载失败兜底（v1.41）：file:// 在个别 ROM 的 WebView 上会被拒 → 先退回虚拟域通道重试；
+  // 两条路都失败才是真问题（编码黑屏走 playing 检测，这里走 error）
   v.addEventListener('error', () => {
     if (isImgName(curPlName)) return;
+    if (window.__engineDir && (v.src || '').indexOf('file://') === 0 && !window.__srcFb) {
+      window.__srcFb = 1;   // 本文件只退一次，再失败走黑屏判定
+      v.src = 'https://vd.local/file/' + encodeURIComponent(curPlName);
+      v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
+      return;
+    }
     hevcFail();
   });
   v.addEventListener('playing', () => { cueOff(); hevcCheck(1600); hevcCheck(4200); });
@@ -2397,9 +2404,18 @@ function healDoneTasks() {
         });
         if (grp.length > 1 && fixTask(t, grp)) continue;
       }
-      // ③ 都没有：按 mtime 最新未认领（此时无并发任务，认领安全）
-      const free = files.find(x => !claimed.has(x.name));
-      if (free) fixTask(t, [free.name]);
+      // ③ 都没有：按标题匹配未认领文件——文件名由完整描述清洗而来，标题是它的子串；
+      // 匹配不上就留空（卡片显示「重新下载」）。绝不按 mtime 瞎认领，会张冠李戴
+      const norm = s => String(s || '').replace(/[\s_#＃·。.，,：:！!？?~（）()\-—|]+/g, '');
+      const nt = norm(t.title);
+      if (nt.length >= 4) {
+        const cand = files.find(x => {
+          if (claimed.has(x.name)) return false;
+          const stem = norm(x.name.replace(/\.[^.]+$/, ''));
+          return stem.indexOf(nt) >= 0 || nt.indexOf(stem) >= 0;
+        });
+        if (cand) fixTask(t, [cand.name]);
+      }
     }
     for (const t of lonely) {   // 有文件但只有一张、名字带序号：也把整组找回来（蟒纹图集案例）
       t.__gt = 1;

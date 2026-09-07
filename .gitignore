@@ -6,10 +6,15 @@ engine/local.properties
 *.apk
 *.aab
 
-# 工具链大文件（构建不需要：Gradle 发行包 130M / 检查器 18M / yt-dlp zipapp 3M）
+# 工具链大文件（构建不需要：Gradle 发行包 130M / 检查器 18M / yt-dlp zipapp 3M / MinGit 46M）
 tools/gradle-7.6.1/
 tools/aarcheck/
+tools/mingit/
+tools/mingit.zip
 tools/*.zipapp
+
+# apksigner 的签名描述文件（本地签名产物）
+*.idsig
 
 # 签名密钥绝不入库：泄露=任何人可给已装用户推"升级包"。
 # 本机保留在仓库根目录 vd.keystore（密码见本人记录），丢失将无法再更新已安装的 App

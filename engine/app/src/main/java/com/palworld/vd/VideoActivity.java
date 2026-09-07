@@ -2,6 +2,7 @@ package com.palworld.vd;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Dialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
@@ -9,6 +10,7 @@ import android.content.res.Configuration;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.SurfaceTexture;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioManager;
 import android.net.Uri;
@@ -20,6 +22,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.TextureView;
 import android.view.View;
+import android.view.Window;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -57,7 +60,7 @@ public class VideoActivity extends Activity {
 
     private FrameLayout root;
     private LinearLayout topBar, botBar;
-    private TextView titleV, curT, durT, cueV, playIco, spdBtn, fillBtn, prevB, nextB, cntV, centerPlay, spd2x, moreBtn;
+    private TextView titleV, curT, durT, cueV, playIco, spdBtn, fillBtn, prevB, nextB, cntV, spd2x, moreBtn;
     private PBar pbar;
 
     private final Handler h = new Handler(Looper.getMainLooper());
@@ -66,6 +69,8 @@ public class VideoActivity extends Activity {
     private float speed = 1f;
     private boolean fillMode = false;   // false=适配（完整画面留黑边，默认） true=铺满（裁切边缘）
     private boolean loop = false;       // 单集循环
+    private boolean muted = false;      // 静音（⋮ 菜单独有，外面没有开关）
+    private boolean autoNext = true;    // 看完自动下一集（⋮ 菜单可关）
     private int vw = 0, vh = 0;
     private boolean sizedOnce = false;
     private int lastSaveMs = 0;
@@ -91,6 +96,8 @@ public class VideoActivity extends Activity {
         if (speed <= 0 || speed > 4) speed = 1f;
         fillMode = "1".equals(prefs.getString("vd_fill_n", "0"));
         loop = "1".equals(prefs.getString("vd_loop_n", "0"));
+        muted = "1".equals(prefs.getString("vd_mute_n", "0"));
+        autoNext = !"0".equals(prefs.getString("vd_autonext_n", "1"));
 
         files = getIntent().getStringArrayExtra("files");
         idx = getIntent().getIntExtra("index", 0);
@@ -125,6 +132,7 @@ public class VideoActivity extends Activity {
         player.setAudioAttributes(new AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true);
         player.setRepeatMode(loop ? Player.REPEAT_MODE_ONE : Player.REPEAT_MODE_OFF);
+        player.setVolume(muted ? 0f : 1f);
         player.addListener(new Player.Listener() {
             @Override public void onVideoSizeChanged(VideoSize vs) {
                 if (vs.width > 0 && vs.height > 0) { vw = vs.width; vh = vs.height; fitVideo(); }
@@ -153,7 +161,7 @@ public class VideoActivity extends Activity {
                     cue("加载中…", 0);
                 } else if (state == Player.STATE_ENDED) {
                     clearProg();
-                    if (idx < files.length - 1) play(idx + 1);   // 连播：图集/多视频任务
+                    if (autoNext && idx < files.length - 1) play(idx + 1);   // 连播（⋮ 菜单可关）：图集/多视频任务
                     else { setPlayIco(); showHud(); }
                 }
             }
@@ -228,54 +236,126 @@ public class VideoActivity extends Activity {
 
     // ================= 倍速 / 画面 / 菜单 =================
 
-    /** 倍速列表选择（一屏看全所有档位，当前档打勾） */
+    /** 底部弹层行选中回调 */
+    private interface SheetPick { void onPick(int i); }
+
+    /** 手势导航条高度（弹层别被系统导航条挡住）；取不到就算 0 */
+    private int navInset() {
+        try {
+            int id = getResources().getIdentifier("navigation_bar_height", "dimen", "android");
+            return id > 0 ? getResources().getDimensionPixelSize(id) : 0;
+        } catch (Throwable t) { return 0; }
+    }
+
+    /** App 风格底部弹层（v1.39）：白卡圆角顶 + 行式菜单，替代系统 AlertDialog——
+     *  系统弹窗的样式和 App 完全不搭。states[i] 为空串则不显示右侧状态字 */
+    private Dialog showSheet(String title, String[] labels, String[] states, final SheetPick pick) {
+        final Dialog d = new Dialog(this);
+        d.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xFFFFFFFF);
+        bg.setCornerRadii(new float[]{dp(22), dp(22), dp(22), dp(22), 0, 0, 0, 0});
+        box.setBackgroundDrawable(bg);
+        box.setPadding(0, dp(6), 0, dp(10) + navInset());
+        // 顶部小把手 + 标题
+        View handle = new View(this);
+        GradientDrawable hg = new GradientDrawable();
+        hg.setColor(0xFFE2E6EE);
+        hg.setCornerRadius(dp(2));
+        handle.setBackgroundDrawable(hg);
+        LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(dp(36), dp(4));
+        hp.gravity = Gravity.CENTER_HORIZONTAL;
+        hp.topMargin = dp(10);
+        box.addView(handle, hp);
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextColor(0xFF8A93A6);
+        t.setTextSize(12.5f);
+        t.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-1, -2);
+        tp.topMargin = dp(8);
+        tp.bottomMargin = dp(2);
+        box.addView(t, tp);
+        for (int i = 0; i < labels.length; i++) {
+            final int fi = i;
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(20), dp(14), dp(20), dp(14));
+            TextView lab = new TextView(this);
+            lab.setText(labels[i]);
+            lab.setTextColor(0xFF171A20);
+            lab.setTextSize(15);
+            row.addView(lab, new LinearLayout.LayoutParams(0, -2, 1f));
+            String st = states != null && i < states.length ? states[i] : "";
+            if (st != null && st.length() > 0) {
+                TextView sv = new TextView(this);
+                sv.setText(st);
+                sv.setTextColor(0xFF3D6AE8);
+                sv.setTextSize(13);
+                row.addView(sv, new LinearLayout.LayoutParams(-2, -2));
+            }
+            row.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { d.dismiss(); pick.onPick(fi); } });
+            box.addView(row, new LinearLayout.LayoutParams(-1, -2));
+            if (i < labels.length - 1) {
+                View div = new View(this);
+                div.setBackgroundColor(0xFFF1F3F7);
+                LinearLayout.LayoutParams dp2 = new LinearLayout.LayoutParams(-1, Math.max(1, dp(1)));
+                dp2.leftMargin = dp(20);
+                box.addView(div, dp2);
+            }
+        }
+        d.setContentView(box);
+        Window w = d.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(0x00000000));
+            w.setGravity(Gravity.BOTTOM);
+            w.setLayout(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        d.show();
+        box.setTranslationY(dp(380));
+        box.animate().translationY(0f).setDuration(200).start();
+        return d;
+    }
+
+    /** 倍速列表选择（底部弹层，一屏看全所有档位，当前档打勾） */
     private void showSpeedMenu() {
         final float[] opts = {3f, 2f, 1.5f, 1.25f, 1f, 0.75f, 0.5f};
         String[] labels = new String[opts.length];
-        int sel = 0;
+        String[] states = new String[opts.length];
         for (int i = 0; i < opts.length; i++) {
             labels[i] = trimF(opts[i]) + "x" + (opts[i] == 1f ? "（正常）" : "");
-            if (opts[i] == speed) sel = i;
+            states[i] = opts[i] == speed ? "✓" : "";
         }
-        new AlertDialog.Builder(this)
-            .setTitle("播放倍速")
-            .setSingleChoiceItems(labels, sel, new android.content.DialogInterface.OnClickListener() {
-                @Override public void onClick(android.content.DialogInterface d, int w) {
-                    speed = opts[w];
-                    applySpeed();
-                    prefs.edit().putString("vd_speed_n", String.valueOf(speed)).apply();
-                    cue(trimF(speed) + "x");
-                    showHud();
-                    d.dismiss();
-                }
-            })
-            .setNegativeButton("取消", null)
-            .show();
+        showSheet("播放倍速", labels, states, new SheetPick() {
+            @Override public void onPick(int i) {
+                speed = opts[i];
+                applySpeed();
+                prefs.edit().putString("vd_speed_n", String.valueOf(speed)).apply();
+                cue(trimF(speed) + "x");
+                showHud();
+            }
+        });
     }
 
-    /** 右上角 ⋮ 更多菜单（B站式）：倍速/画面/旋转/循环/外部打开 */
+    /** 右上角 ⋮ 更多菜单（v1.39）：只放底栏没有的功能——循环/静音/自动连播/旋转/外部打开
+     *  （倍速、画面适配底栏已有按钮，不在这里重复） */
     private void showMoreMenu() {
-        final String[] items = {
-            "播放倍速 · " + trimF(speed) + "x",
-            fillMode ? "画面 · 铺满（点切适配）" : "画面 · 适配（点切铺满）",
-            "旋转屏幕",
-            (loop ? "✓ " : "") + "单集循环",
-            "用其他应用打开",
-        };
-        new AlertDialog.Builder(this)
-            .setItems(items, new android.content.DialogInterface.OnClickListener() {
-                @Override public void onClick(android.content.DialogInterface d, int w) {
-                    switch (w) {
-                        case 0: showSpeedMenu(); break;
-                        case 1: toggleFill(); break;
-                        case 2: toggleRotate(); break;
-                        case 3: toggleLoop(); break;
-                        case 4: openExternal(); break;
-                    }
+        String[] labels = { "单集循环", "静音", "自动连播", "旋转屏幕", "用其他应用打开" };
+        String[] states = { loop ? "开" : "关", muted ? "开" : "关", autoNext ? "开" : "关", "", "" };
+        showSheet("更多", labels, states, new SheetPick() {
+            @Override public void onPick(int i) {
+                switch (i) {
+                    case 0: toggleLoop(); break;
+                    case 1: toggleMute(); break;
+                    case 2: toggleAutoNext(); break;
+                    case 3: toggleRotate(); break;
+                    case 4: openExternal(); break;
                 }
-            })
-            .setNegativeButton("取消", null)
-            .show();
+            }
+        });
     }
 
     private void toggleLoop() {
@@ -283,6 +363,21 @@ public class VideoActivity extends Activity {
         prefs.edit().putString("vd_loop_n", loop ? "1" : "0").apply();
         player.setRepeatMode(loop ? Player.REPEAT_MODE_ONE : Player.REPEAT_MODE_OFF);
         cue(loop ? "单集循环：开" : "单集循环：关");
+        showHud();
+    }
+
+    private void toggleMute() {
+        muted = !muted;
+        prefs.edit().putString("vd_mute_n", muted ? "1" : "0").apply();
+        try { player.setVolume(muted ? 0f : 1f); } catch (Exception ignored) {}
+        cue(muted ? "🔇 静音：开" : "🔊 静音：关");
+        showHud();
+    }
+
+    private void toggleAutoNext() {
+        autoNext = !autoNext;
+        prefs.edit().putString("vd_autonext_n", autoNext ? "1" : "0").apply();
+        cue(autoNext ? "自动连播：开" : "自动连播：关");
         showHud();
     }
 
@@ -313,12 +408,6 @@ public class VideoActivity extends Activity {
     private void setPlayIco() {
         boolean playing = player != null && player.isPlaying();
         playIco.setText(playing ? "⏸" : "▶");
-        centerPlay.setText(playing ? "" : "▶");
-        if (playing) { centerPlay.setVisibility(View.GONE); return; }
-        centerPlay.setVisibility(View.VISIBLE);
-        centerPlay.setScaleX(0.7f);
-        centerPlay.setScaleY(0.7f);
-        centerPlay.animate().scaleX(1f).scaleY(1f).setDuration(180).start();
     }
 
     private void setBright(float f) {
@@ -487,7 +576,8 @@ public class VideoActivity extends Activity {
         return v;
     }
 
-    /** 圆形图标按钮（返回/播放/⋮） */
+    /** 圆形图标按钮（返回/播放/⋮）：与底部药丸同一套玻璃风（v1.39 统一——
+     *  之前播放键是暗底、药丸是亮玻璃，两种风格混在一起很突兀） */
     private TextView circle(String t, float sizeSp, int dimDp, View.OnClickListener l) {
         TextView v = new TextView(this);
         v.setText(t);
@@ -496,8 +586,8 @@ public class VideoActivity extends Activity {
         v.setGravity(Gravity.CENTER);
         GradientDrawable g = new GradientDrawable();
         g.setShape(GradientDrawable.OVAL);
-        g.setColor(0x2E000000);
-        g.setStroke(dp(1), 0x2EFFFFFF);
+        g.setColor(0x2EFFFFFF);
+        g.setStroke(dp(1), 0x45FFFFFF);
         v.setBackgroundDrawable(g);
         v.setOnClickListener(l);
         v.setLayoutParams(new LinearLayout.LayoutParams(dp(dimDp), dp(dimDp)));
@@ -554,23 +644,6 @@ public class VideoActivity extends Activity {
         s2.bottomMargin = dp(28);
         root.addView(spd2x, s2);
 
-        // 暂停时中央大播放键（点击继续）
-        centerPlay = new TextView(this);
-        centerPlay.setTextColor(0xFFFFFFFF);
-        centerPlay.setTextSize(32);
-        centerPlay.setGravity(Gravity.CENTER);
-        centerPlay.setPadding(0, dp(4), 0, 0);
-        {
-            GradientDrawable g = new GradientDrawable();
-            g.setShape(GradientDrawable.OVAL);
-            g.setColor(0x66000000);
-            g.setStroke(dp(2), 0x59FFFFFF);
-            centerPlay.setBackgroundDrawable(g);
-        }
-        centerPlay.setVisibility(View.GONE);
-        centerPlay.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { togglePlay(); } });
-        root.addView(centerPlay, new FrameLayout.LayoutParams(dp(80), dp(80), Gravity.CENTER));
-
         // 顶栏：返回 + 标题 + 序号 + 更多(⋮)
         topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
@@ -617,8 +690,9 @@ public class VideoActivity extends Activity {
         LinearLayout.LayoutParams w2 = new LinearLayout.LayoutParams(-2, -2);
 
         playIco = circle("", 19, 42, new View.OnClickListener() { @Override public void onClick(View v) { togglePlay(); } });
-        prevB = pill("‹ 上一集", new View.OnClickListener() { @Override public void onClick(View v) { step(-1); } });
-        nextB = pill("下一集 ›", new View.OnClickListener() { @Override public void onClick(View v) { step(1); } });
+        // 上一集/下一集用紧凑圆形图标（原来的文字药丸在窄屏+挖孔下会挤出屏幕被裁切）
+        prevB = circle("‹", 20, 42, new View.OnClickListener() { @Override public void onClick(View v) { step(-1); } });
+        nextB = circle("›", 20, 42, new View.OnClickListener() { @Override public void onClick(View v) { step(1); } });
         curT = white(14);
         curT.setFontFeatureSettings("tnum");
         durT = white(14);
@@ -637,9 +711,15 @@ public class VideoActivity extends Activity {
         row.addView(slash, w2);
         row.addView(durT, w2);
         row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
-        row.addView(prevB, w2);
-        row.addView(nextB, w2);
-        row.addView(spdBtn, w2);
+        LinearLayout.LayoutParams pm = new LinearLayout.LayoutParams(-2, -2);
+        pm.leftMargin = dp(6);
+        row.addView(prevB, pm);
+        LinearLayout.LayoutParams nm = new LinearLayout.LayoutParams(-2, -2);
+        nm.leftMargin = dp(4);
+        row.addView(nextB, nm);
+        LinearLayout.LayoutParams sm = new LinearLayout.LayoutParams(-2, -2);
+        sm.leftMargin = dp(10);
+        row.addView(spdBtn, sm);
         row.addView(fillBtn, w2);
         botBar.addView(row, new LinearLayout.LayoutParams(-1, -2));
         root.addView(botBar, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
@@ -687,6 +767,16 @@ public class VideoActivity extends Activity {
         dec.setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
             | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
             | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+        // 挖孔屏/刘海屏：内容铺进挖孔区，顶栏底栏再靠内边距避开——
+        // 默认模式会把横屏两侧（=竖屏的顶底）整条让出去，按钮看着被"切掉"半截
+        if (android.os.Build.VERSION.SDK_INT >= 28) {
+            try {
+                android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
+                lp.layoutInDisplayCutoutMode =
+                    android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                getWindow().setAttributes(lp);
+            } catch (Throwable ignored) {}
+        }
     }
 
     private void cue(String t) { cue(t, 900); }
@@ -711,8 +801,7 @@ public class VideoActivity extends Activity {
             @Override public boolean onSingleTapConfirmed(MotionEvent e) { toggleHud(); return true; }
 
             @Override public boolean onDoubleTap(MotionEvent e) {
-                togglePlay();
-                cue(player != null && player.getPlayWhenReady() ? "▶ 播放" : "⏸ 暂停", 600);
+                togglePlay();   // 双击=播放/暂停（状态看底栏播放键，不放提示/大图标）
                 showHud();
                 return true;
             }

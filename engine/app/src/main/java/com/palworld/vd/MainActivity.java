@@ -67,6 +67,8 @@ public class MainActivity extends Activity {
         }
         web = new WebView(this);
         setContentView(web);
+        // 模拟器/真机调试：debug 构建开 WebView 远程调试（chrome://inspect / CDP），release 不受影响
+        if (BuildConfig.DEBUG) android.webkit.WebView.setWebContentsDebuggingEnabled(true);
 
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -77,6 +79,14 @@ public class MainActivity extends Activity {
         s.setDisplayZoomControls(false);
         s.setLoadWithOverviewMode(true);
         s.setUseWideViewPort(true);
+        // file:// 页面要加载虚拟域 https://vd.local/ 的媒体（拦截器直读手机文件、不出网）。
+        // 用 https 是因为 file: 是安全源，http: 子资源会被新版 WebView 按混合内容拦截
+        s.setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        // 页内媒体（视频/图集）在 App 内直接用引擎目录的 file:// 绝对路径：拦截式虚拟域对
+        // Range/206 响应支持不全（新版 Chromium 上带偏移的 206 一律 ERR_FAILED，视频必挂），
+        // file:// 走系统文件通道，seek/拖进度条天然可用。API 30+ 默认禁 file://，必须显式开
+        s.setAllowFileAccess(true);
+        s.setAllowFileAccessFromFileURLs(true);
 
         // ---------- 本地引擎（解析+下载全部在手机上） ----------
         engine = new LocalEngine(this, new LocalEngine.Listener() {            @Override
@@ -238,13 +248,13 @@ public class MainActivity extends Activity {
                 Map<String, String> h = new HashMap<>();
                 h.put("Accept-Ranges", "bytes");
                 h.put("Content-Range", "bytes " + start + "-" + end + "/" + total);
-                h.put("Content-Length", String.valueOf(end - start + 1));
+                // Content-Length 绝不能手动设：WebView 会再自动加一个，两头重复成 "6660, 6660"
+                // （非法长度）→ 渲染进程按坏响应丢弃，表现为缩略图挂、页内播放报"不支持"
                 return new WebResourceResponse(mime, null, 206, "Partial Content", h,
                     new LimitedStream(new java.io.BufferedInputStream(fis), end - start + 1));
             }
             Map<String, String> h = new HashMap<>();
             h.put("Accept-Ranges", "bytes");
-            h.put("Content-Length", String.valueOf(total));
             return new WebResourceResponse(mime, null, 200, "OK", h,
                 new java.io.BufferedInputStream(new FileInputStream(f)));
         } catch (Exception e) {

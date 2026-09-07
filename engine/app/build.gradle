@@ -11,8 +11,8 @@ android {
         applicationId "com.palworld.vd"
         minSdk 24
         targetSdk 34
-        versionCode 37
-        versionName "1.36"
+        versionCode 41
+        versionName "1.39"
         // 只保留 arm64：近 8 年的手机全是 64 位，省掉整份 32 位引擎约 47MB
         ndk { abiFilters 'arm64-v8a' }
     }
@@ -33,6 +33,8 @@ android {
     // Python/yt-dlp/ffmpeg 的 .so 必须解压到文件系统（配合 manifest android:extractNativeLibs="true"）
     packagingOptions {
         jniLibs { useLegacyPackaging = true }
+        // 本机调试 daemon 会在 assets 里留 __pycache__（.gitignore 拦得住 git，拦不住打包）
+        resources { excludes += ['assets/__pycache__/*', 'META-INF/*.kotlin_module'] }
     }
 }
 

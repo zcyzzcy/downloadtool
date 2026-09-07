@@ -98,8 +98,8 @@ public class LocalEngine {
     private static class DaemonTask {
         final long startAtMs;
         final LocalEngine eng;   // 任务归属的引擎（slots/vdDir 都用它），跨 Activity 重建也不释放错对象
-        volatile String lastTitle, destName;
-        DaemonTask(LocalEngine e, long s) { eng = e; startAtMs = s; }
+        volatile String lastTitle, destName, url;
+        DaemonTask(LocalEngine e, long s, String u) { eng = e; startAtMs = s; url = u; }
     }
 
     private static final String UA_ENGINE =
@@ -484,6 +484,10 @@ public class LocalEngine {
         return n != null && n.toLowerCase().matches(".+\\.(mp4|m4v|mov|webm|mkv|flv|avi|ts)$");
     }
 
+    private static boolean isImageName(String n) {
+        return n != null && n.toLowerCase().matches(".+\\.(jpe?g|png|gif|webp|bmp|heic|heif|avif)$");
+    }
+
     /** 视频归一成 H.264/AAC 的 mp4。已合规原样返回名；容器不对→秒级 remux；编码不对→转码。
      *  任何失败都返回原文件名（原文件绝不删）。需要干活时先发 merging 状态（卡片显示 合并转码中…） */
     private String normalizeVideo(final String name, final String id, final String title) {
@@ -544,6 +548,142 @@ public class LocalEngine {
         }
         args.add(out.getAbsolutePath());
         return args;
+    }
+
+    /** 抖音片尾推广自动裁剪（v1.39）：抖音直链视频常在正片后拼一段"类广告"尾巴。
+     *  ① API 时长已知 → 文件比它多出来的就是尾巴，精确切；
+     *  ② 拿不到 API 时长 → 抽尾部 ~12 秒灰度小帧，找"硬切边界 + 之后画面基本不动"的静态卡片。
+     *  判不出/切不动都原样返回名，原文件绝不丢 */
+    private String trimDouyinTail(final String name, final String id, long apiDurMs) {
+        try {
+            File in = new File(vdDir, name);
+            if (!in.isFile() || in.length() < 300000 || !isVideoName(name)) return name;
+            String[] p = probeMedia(in.getAbsolutePath());
+            if (p == null) return name;
+            long durSec = Long.parseLong(p[2]);
+            if (durSec < 15 || durSec > 1200) return name;   // 太短没尾巴可言，太长检测窗口没意义
+            double cut = 0;
+            double api = apiDurMs / 1000.0;
+            if (api >= 3 && durSec - api >= 1.2 && durSec - api <= 15) {
+                cut = api + 0.12;   // 正片时长已知：多出来的整段都是尾巴
+            } else {
+                cut = detectStaticTail(in, durSec);   // 兜底：内容检测
+            }
+            if (cut <= 1 || cut >= durSec - 0.8) return name;
+            dPostState(id, "merging", "正在裁掉片尾推广…", null, null);
+            File out = new File(vdDir, ".tmp-trim-" + id + ".mp4");
+            out.delete();
+            List<String> args = new ArrayList<>();
+            args.add("-hide_banner");
+            args.add("-y");
+            args.add("-i");
+            args.add(in.getAbsolutePath());
+            args.add("-t");
+            args.add(String.format(java.util.Locale.US, "%.2f", cut));
+            args.add("-c");
+            args.add("copy");
+            args.add("-movflags");
+            args.add("+faststart");
+            args.add(out.getAbsolutePath());
+            runFfmpeg(args, 120000);
+            // -c copy 只能切到关键帧：尾巴残留超过 1 秒就重编码精确切一次
+            String[] q = out.isFile() && out.length() > 0 ? probeMedia(out.getAbsolutePath()) : null;
+            double od = q != null && q[2] != null ? Double.parseDouble(q[2]) : -1;
+            if (od >= 0 && cut - od > 1.0) {
+                out.delete();
+                args = new ArrayList<>();
+                args.add("-hide_banner");
+                args.add("-y");
+                args.add("-i");
+                args.add(in.getAbsolutePath());
+                args.add("-t");
+                args.add(String.format(java.util.Locale.US, "%.2f", cut));
+                args.add("-c:v");
+                args.add("libx264");
+                args.add("-preset");
+                args.add("veryfast");
+                args.add("-crf");
+                args.add("23");
+                args.add("-c:a");
+                args.add("aac");
+                args.add("-b:a");
+                args.add("128k");
+                args.add("-movflags");
+                args.add("+faststart");
+                args.add(out.getAbsolutePath());
+                runFfmpeg(args, 300000);
+            }
+            // 切坏了/切空了都不要：产物至少得有原文件的一半大
+            if (!out.isFile() || out.length() == 0 || out.length() < in.length() / 2) { out.delete(); return name; }
+            String outName = uniqueName(name.replaceAll("\\.[^.]+$", "") + ".mp4");
+            if (out.renameTo(new File(vdDir, outName))) { in.delete(); return outName; }
+            out.delete();
+            return name;
+        } catch (Throwable t) {
+            return name;
+        }
+    }
+
+    /** 尾部静态卡片检测：抽最后 ~12 秒（2fps、48x27 灰度）原始帧（输出端 seek，帧级准确），
+     *  找最后一处"硬切"边界，边界之后帧间差几乎为 0（静态推广卡）才认定是尾巴。
+     *  返回应保留的秒数；判不出返回 0 */
+    private double detectStaticTail(File in, long durSec) {
+        File raw = null;
+        try {
+            double win = 12.0;
+            if (durSec <= win + 4) win = Math.max(4.0, durSec / 2);
+            double start = Math.max(0, durSec - win - 0.4);
+            raw = new File(vdDir, ".tmp-tail-" + Integer.toHexString(in.getName().hashCode()) + ".raw");
+            raw.delete();
+            List<String> args = new ArrayList<>();
+            args.add("-hide_banner");
+            args.add("-y");
+            args.add("-i");
+            args.add(in.getAbsolutePath());
+            args.add("-ss");
+            args.add(String.format(java.util.Locale.US, "%.2f", start));
+            args.add("-t");
+            args.add(String.valueOf((int) Math.ceil(win)));
+            args.add("-an");
+            args.add("-vf");
+            args.add("fps=2,scale=48:27,format=gray");
+            args.add("-f");
+            args.add("rawvideo");
+            args.add(raw.getAbsolutePath());
+            runFfmpeg(args, 90000);
+            if (!raw.isFile()) return 0;
+            final int FS = 48 * 27;
+            byte[] b = new byte[(int) Math.min(raw.length(), (long) FS * 40)];
+            java.io.FileInputStream fi = new java.io.FileInputStream(raw);
+            try {
+                int off = 0;
+                while (off < b.length) { int n = fi.read(b, off, b.length - off); if (n <= 0) break; off += n; }
+            } finally { try { fi.close(); } catch (Throwable ignored) {} }
+            int n = b.length / FS;
+            if (n < 5) return 0;
+            // d[i] = 第 i 帧与第 i+1 帧的平均像素差（0-255）
+            double[] d = new double[n - 1];
+            for (int i = 0; i < n - 1; i++) {
+                long acc = 0;
+                for (int j = 0; j < FS; j++) acc += Math.abs((b[i * FS + j] & 0xFF) - (b[(i + 1) * FS + j] & 0xFF));
+                d[i] = acc / (double) FS;
+            }
+            // 从后往前找边界：d[bd] 是硬切（大），其后全部近似静止（小）；静止段 ≥1.5 秒（3 帧）才算尾巴
+            for (int bd = n - 5; bd >= 0; bd--) {
+                if (d[bd] < 14) continue;
+                boolean calm = true;
+                for (int j = bd + 1; j < n - 1; j++) if (d[j] > 3.5) { calm = false; break; }
+                if (!calm) continue;
+                double tail = (n - 2 - bd) * 0.5;   // 边界后每帧 0.5 秒
+                if (tail < 1.5 || tail > 12) continue;
+                return start + (bd + 1) * 0.5 - 0.2;
+            }
+            return 0;
+        } catch (Throwable t) {
+            return 0;
+        } finally {
+            if (raw != null) { try { raw.delete(); } catch (Throwable ignored) {} }
+        }
     }
 
     /** 图片归一成 jpg（webp/avif/heic 部分图库和 App 不认）。成功返回新名，失败返回原名（原文件保留） */
@@ -664,17 +804,22 @@ public class LocalEngine {
                         // ② 常驻守护进程
                         if (ensureDaemon()) {
                             try {
+                                // 每任务独立隐藏目录：批量并发时产物互不可见，收尾再搬到根目录——
+                                // 之前直接落根目录，同名文件会被 yt-dlp 判"已下载"复用旧文件、
+                                // 产物扫描也会把别的任务正在写的半成品认过来（首页标题和视频对不上的根源）
+                                File jobDir = new File(vdDir, ".job-" + id);
+                                jobDir.mkdirs();
                                 JSONObject req = new JSONObject();
                                 req.put("id", id);
                                 req.put("action", "download");
                                 req.put("url", url2);
                                 req.put("format", formatFilter(quality));
-                                req.put("outtmpl", vdDir.getAbsolutePath() + "/%(title).180s.%(ext)s");
+                                req.put("outtmpl", new File(jobDir, "%(title).180s.%(ext)s").getAbsolutePath());
                                 req.put("merge", true);
                                 if (aria2Ok) req.put("downloader", "libaria2c.so");
                                 String ck = writeCookies(id, cookies);
                                 if (ck != null) req.put("cookiefile", ck);
-                                dTasks.put(id, new DaemonTask(LocalEngine.this, startAtMs));
+                                dTasks.put(id, new DaemonTask(LocalEngine.this, startAtMs, url2));
                                 if (daemonSend(req)) {
                                     handedToDaemon = true;
                                     taskMode.put(id, "daemon");
@@ -689,6 +834,7 @@ public class LocalEngine {
                     } finally {
                         if (!handedToDaemon) {
                             new File(ctx.getFilesDir(), "cookies-" + id + ".txt").delete();
+                            deleteRecursive(new File(vdDir, ".job-" + id));   // 旧路径收尾：清掉本任务的独立目录（含残件）
                             taskMode.remove(id);
                             slots.release();
                         }
@@ -711,12 +857,15 @@ public class LocalEngine {
         return id;
     }
 
-    /** 旧路径：每任务独立 yt-dlp 进程（结构上最稳，作为守护进程的兜底保留） */
+    /** 旧路径：每任务独立 yt-dlp 进程（结构上最稳，作为守护进程的兜底保留）。
+     *  产物同样落在 .job-<id> 独立目录：并发批量不会互相污染，收尾搬到根目录 */
     private void legacyRun(final String url2, final String quality, final String cookies, final String id, final long startAtMs) throws Exception {
         postState(id, "downloading", url2, null, null);
+        final File jobDir = new File(vdDir, ".job-" + id);
+        jobDir.mkdirs();
         YoutubeDLRequest req = new YoutubeDLRequest(url2);
         applyCommon(req, quality, cookies, id);
-        req.addOption("-o", vdDir.getAbsolutePath() + "/%(title).180s.%(ext)s");
+        req.addOption("-o", new File(jobDir, "%(title).180s.%(ext)s").getAbsolutePath());
         if (ffmpegOk) req.addOption("--merge-output-format", "mp4");   // 分轨合并成 mp4
         req.addOption("--no-playlist");
 
@@ -752,18 +901,32 @@ public class LocalEngine {
         };
         YoutubeDL.getInstance().execute(req, processId, cb);   // 失败会抛异常
         processIds.remove(id);
-        // 完成后扫目录里的真实产物（本任务开始之后新出现的媒体文件）——比解析输出行可靠：
-        // 外部下载器/合并/改名场景下输出行里的名字可能是已删除的分轨文件
-        ArrayList<String> produced = scanProduced(startAtMs);
-        if (produced.isEmpty() && destFile.length() > 0 && new File(vdDir, destFile.toString()).isFile()) {
+        // 产物只在本任务的独立目录里找（独占无并发污染）；上报缺失再按输出行抓到的文件名补
+        ArrayList<String> produced = scanJobDir(jobDir);
+        if (produced.isEmpty() && destFile.length() > 0 && new File(jobDir, destFile.toString()).isFile()) {
             produced.add(destFile.toString());
         }
         if (produced.isEmpty()) {
             postState(id, "error", null, "下载结束但没找到产出文件：可能是存储权限受限（我的保存页顶部可去授权）或目录被系统清理，重试一次", null);
         } else {
-            // 视频归一成 H.264 mp4（HEVC/webm 部分手机播不了）；已是合规格式原样保留
+            // 与 daemon 路径同规：只产出预览图片（未登录被风控）按失败处理，详见 finishDaemonTask 注释
+            boolean onlyImages = true;
+            for (String n : produced) if (!isImageName(n)) { onlyImages = false; break; }
+            if (onlyImages) {
+                postState(id, "error", null, "该站点没有提供视频流（未登录时部分站点只给预览图）。设置 → 登录信息管理 里登录后重试", null);
+                return;   // jobDir 由 submit() 的 finally 整体清掉
+            }
+            // 搬到根目录（标题清洗命名 + 防撞后缀），再视频归一成 H.264 mp4
             ArrayList<String> fin = new ArrayList<>();
-            for (String n : produced) fin.add(isVideoName(n) ? normalizeVideo(n, id, null) : n);
+            for (String n : produced) {
+                String moved = moveToRoot(jobDir, n);
+                if (moved == null) continue;
+                fin.add(isVideoName(moved) ? normalizeVideo(moved, id, null) : moved);
+            }
+            if (fin.isEmpty()) {
+                postState(id, "error", null, "下载结束但产出文件搬移失败，重试一次", null);
+                return;
+            }
             java.util.Collections.sort(fin);
             scanToGallery(fin);
             markOwned(fin);
@@ -772,15 +935,15 @@ public class LocalEngine {
         }
     }
 
-    /** 本任务开始后新出现的媒体文件（产出扫描，新旧两条下载路径共用） */
-    private ArrayList<String> scanProduced(long startAtMs) {
+    /** 本任务 .job 独立目录里的媒体产物（独占目录，无并发污染；新旧两条下载路径共用） */
+    private static ArrayList<String> scanJobDir(File jobDir) {
         ArrayList<String> produced = new ArrayList<>();
         try {
-            File[] all = vdDir.listFiles();
+            File[] all = jobDir.listFiles();
             if (all != null) {
                 for (File f : all) {
                     String n = f.getName();
-                    if (!f.isFile() || n.startsWith(".") || f.lastModified() < startAtMs - 2000) continue;
+                    if (!f.isFile() || n.startsWith(".")) continue;
                     if (!n.matches("(?i).+\\.(" + MEDIA_EXT + ")$")) continue;
                     if (CAMERA_NAME.matcher(n).find()) continue;   // 下载期间相机刚拍的不算本任务产物
                     produced.add(n);
@@ -790,14 +953,79 @@ public class LocalEngine {
         return produced;
     }
 
+    /** .job 产物搬到下载根目录：防撞后缀（同名文件共存）。
+     *  文件名保留原始文案全文（#话题/@提及都在）——展示层的标题才做清洗；同名任务不会被
+     *  yt-dlp 判"已下载"复用旧文件（.job 是空目录，必然真下载） */
+    private String moveToRoot(File jobDir, String n) {
+        try {
+            File src = new File(jobDir, n);
+            if (!src.isFile()) {
+                File alt = new File(vdDir, n);   // 兼容极老脚本直落根目录的情况
+                if (alt.isFile()) src = alt;
+            }
+            if (!src.isFile() || src.length() == 0) return null;
+            String ext = extOf(n);
+            String stem = n.substring(0, n.length() - ext.length());
+            String target = sanitizeName(stem) + ext;
+            // 已在根目录且名字没变：别自搬自改
+            if (vdDir.equals(src.getParentFile()) && target.equals(n)) return n;
+            String want = uniqueName(target);
+            if (src.renameTo(new File(vdDir, want))) return want;
+            return null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 守护进程刚（重）启动：清掉上次会话留下的孤儿 .job-* 目录（没有对应在跑任务的） */
+    private void sweepJobDirs() {
+        try {
+            if (vdDir == null) return;
+            java.util.HashSet<String> live = new java.util.HashSet<>(dTasks.keySet());
+            File[] all = vdDir.listFiles();
+            if (all == null) return;
+            for (File f : all) {
+                String n = f.getName();
+                if (!f.isDirectory() || !n.startsWith(".job-")) continue;
+                if (!live.contains(n.substring(5))) deleteRecursive(f);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /** 下载文案标题清洗（与页面 cleanTitle 同规则）：取第一个 #话题/@提及 之前的部分；
+     *  全文只有话题时取首个话题词；都没有则剥掉 @提及 返回剩余。批量后"标题和视频对不上"的
+     *  一半原因是文件名带着 #尾巴 而 UI 标题不带——两边同规则后永远一致 */
+    private static String cleanDescTitle(String s) {
+        String raw = s == null ? "" : s.trim();
+        if (raw.isEmpty()) return raw;
+        int cut = raw.length();
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c == '#' || c == '@') { cut = i; break; }
+        }
+        String head = raw.substring(0, cut).trim();
+        String tail = ":：,，。.!！~·-—|　 \t";
+        while (!head.isEmpty() && tail.indexOf(head.charAt(head.length() - 1)) >= 0) {
+            head = head.substring(0, head.length() - 1).trim();
+        }
+        if (!head.isEmpty()) return head;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("#([^#\\s]{1,40})").matcher(raw);
+        if (m.find()) return m.group(1).trim();
+        String noMention = raw.replaceAll("@[^\\s@:：,，]+", " ").replaceAll("\\s+", " ").trim();
+        return noMention;
+    }
+
     /** 清晰度 → yt-dlp 格式串（新旧路径共用；优先 WebView 能播的 h264/vp9，避开 HEVC 有声无画） */
     private static String formatFilter(String quality) {
         String safe = "[vcodec!^=hevc][vcodec!^=h265][vcodec!^=av01]";
+        // 兜底必须限定真视频流：无 cookie 被 playurl 风控(412)拿不到视频格式时，
+        // 不带过滤的 /b 会选中页面图集（一打 .jpg 当任务"成功"），必须逼它报错走重试/提示
+        String vid = "[vcodec!^=none]";
         if (quality != null && quality.matches("\\d+")) {
             return "bv*[height<=" + quality + "]" + safe + "+ba/b[height<=" + quality + "]" + safe
-                + "/bv*[height<=" + quality + "]+ba/b[height<=" + quality + "]/bv*+ba/b";
+                + "/bv*[height<=" + quality + "]+ba/b[height<=" + quality + "]/bv*+ba/b" + vid;
         }
-        return "bv*" + safe + "+ba/b" + safe + "/bv*+ba/b";
+        return "bv*" + safe + "+ba/b" + safe + "/bv*+ba/b" + vid;
     }
 
     /** 页面 cookies 写成任务专属文件（守护/旧路径共用），返回路径；内容为空返回 null */
@@ -833,6 +1061,7 @@ public class LocalEngine {
                 }
             }
             String videoUrl = null;
+            long apiDurMs = 0;   // 作品真实时长（毫秒）：文件比它长出来的部分=片尾推广
             JSONObject v = item.optJSONObject("video");
             if (v != null) {
                 JSONObject pa = v.optJSONObject("play_addr");
@@ -842,6 +1071,9 @@ public class LocalEngine {
                     String uri = pa == null ? "" : pa.optString("uri", "");
                     if (uri.length() > 0) videoUrl = "https://www.iesdouyin.com/aweme/v1/play/?video_id=" + uri + "&ratio=1080p&line=0";
                 }
+                long d = v.optLong("duration", 0);
+                if (d <= 0) d = item.optLong("duration", 0);
+                apiDurMs = d > 1200 ? d : d * 1000;   // 字段可能是毫秒也可能是秒：>20 分钟的一定是毫秒
             }
             if (images.isEmpty()) {
                 // 图文（note）链接取不到图片：宁可回退下一级，也绝不把 note 自带的轮播合成视频当"图文"下下来
@@ -849,19 +1081,22 @@ public class LocalEngine {
                 if ("note".equals(kind)) return false;
                 if (videoUrl == null) return false;
             }
-            String base = sanitizeName(desc.length() > 0 ? desc : "douyin");
-            postState(id, "downloading", base, null, null);
+            String fileBase = sanitizeName(desc.isEmpty() ? "douyin" : desc);   // 文件名保留 #话题/@提及 全文
+            String rawTitle = desc.isEmpty() ? fileBase : desc;                // 状态发原始描述：页面清洗出标题+话题行
+            String dispTitle = cleanDescTitle(desc);                           // （本地日志/兜底用）
+            if (dispTitle.isEmpty()) dispTitle = fileBase;
+            postState(id, "downloading", rawTitle, null, null);
             if (!images.isEmpty()) {   // 图集：并行直下全部图片
-                List<String> saved = downloadMediaUrls(id, images, base);
+                List<String> saved = downloadMediaUrls(id, images, fileBase);
                 if (saved.isEmpty()) return false;
-                postState(id, "done", base, null, new JSONArray(saved).toString());
+                postState(id, "done", rawTitle, null, new JSONArray(saved).toString());
                 scanToGallery(saved);
                 markOwned(saved);
                 ensureThumbs(saved);
                 return true;
             }
             // 单视频：aria2c 16 连接直下，失败退单连接；下完归一成 H.264 mp4（部分手机解不了 HEVC）
-            String want = uniqueName(base + ".mp4");
+            String want = uniqueName(fileBase + ".mp4");
             File out = new File(vdDir, want);
             boolean ok = aria2Ok && aria2Download(id, videoUrl, "https://www.iesdouyin.com/", out);
             // 已取消就不退单连接（那是"取消后偷偷重下"）；aria2c 真失败（网络断/链接过期）才退
@@ -870,10 +1105,11 @@ public class LocalEngine {
                 out.delete();   // 半截文件绝不留：会污染后续任务的产物扫描，也会以坏文件身份进"我的保存"
                 return false;
             }
-            String finalName = normalizeVideo(want, id, base);
+            // 片尾推广先裁掉（v1.39），再归一成 H.264 mp4（部分手机解不了 HEVC）
+            String finalName = normalizeVideo(trimDouyinTail(want, id, apiDurMs), id, dispTitle);
             ArrayList<String> saved = new ArrayList<>();
             saved.add(finalName);
-            postState(id, "done", base, null, new JSONArray(saved).toString());
+            postState(id, "done", rawTitle, null, new JSONArray(saved).toString());
             scanToGallery(saved);
             markOwned(saved);
                 ensureThumbs(saved);
@@ -1180,6 +1416,7 @@ public class LocalEngine {
             final String id = o.optString("id");
             if ("ready".equals(type)) {
                 synchronized (dStartLock) { dReady = true; dStartLock.notifyAll(); }
+                sweepJobDirs();   // 守护进程刚（重）启动：上次会话留下的 .job-* 目录全是孤儿，清掉
                 return;
             }
             if ("fatal".equals(type)) {
@@ -1204,9 +1441,9 @@ public class LocalEngine {
         } catch (Exception ignored) {}
     }
 
-    /** 守护任务收尾：产物以守护进程上报的文件清单为准——并发任务各认各的，互不抢对方的文件
-     *  （扫目录按时间窗认领，4 路并发时会互相污染：把别的任务正在下的分轨文件也报进来）。
-     *  清单缺失才退回扫目录。释放并发槽/清 cookie 都按任务归属的引擎实例来。
+    /** 守护任务收尾：产物在 .job-<id> 独立目录里各认各的，搬到根目录（清洗命名+防撞）再上报。
+     *  上报清单缺失才扫 job 目录兜底（绝不扫全目录时间窗——并发任务会互相污染）。
+     *  释放并发槽/清 cookie/job 目录都按任务归属的引擎实例来。
      *  归一可能要转码（几十秒级），放独立线程跑——绝不能堵住守护进程的输出泵 */
     private void finishDaemonTask(final String id, final String isErr, final JSONArray files) {
         final DaemonTask t = dTasks.remove(id);
@@ -1215,11 +1452,13 @@ public class LocalEngine {
         new File(t.eng.ctx.getFilesDir(), "cookies-" + id + ".txt").delete();
         if (isErr != null) {
             dPostState(id, "error", null, friendlyError(isErr), null);
+            deleteRecursive(new File(t.eng.vdDir, ".job-" + id));
             t.eng.slots.release();
             return;
         }
         new Thread(new Runnable() {
             @Override public void run() {
+                final File jobDir = new File(t.eng.vdDir, ".job-" + id);
                 try {
                     final LocalEngine eng = t.eng;
                     ArrayList<String> produced = new ArrayList<>();
@@ -1227,29 +1466,55 @@ public class LocalEngine {
                         for (int i = 0; i < files.length(); i++) {
                             String n = files.optString(i, "");
                             if (n.length() == 0 || n.startsWith(".") || n.contains("/")) continue;
-                            if (!new File(eng.vdDir, n).isFile()) continue;   // 上报了但没落盘（被清理）的跳过
                             if (CAMERA_NAME.matcher(n).find()) continue;
-                            produced.add(n);
+                            // 新脚本落在 .job 独立目录；极老版本直落根目录也兼容
+                            File f = new File(jobDir, n).isFile() ? new File(jobDir, n) : new File(eng.vdDir, n);
+                            if (!f.isFile()) continue;   // 上报了但没落盘（被清理）的跳过
+                            produced.add(f.getName());
                         }
                     }
-                    if (produced.isEmpty()) produced = eng.scanProduced(t.startAtMs);   // 上报缺失（老脚本）才扫目录兜底
-                    if (produced.isEmpty() && t.destName != null && new File(eng.vdDir, t.destName).isFile()) {
-                        produced.add(t.destName);
+                    if (produced.isEmpty() && t.destName != null) {
+                        File f = new File(jobDir, t.destName).isFile() ? new File(jobDir, t.destName) : new File(eng.vdDir, t.destName);
+                        if (f.isFile()) produced.add(f.getName());
                     }
+                    if (produced.isEmpty()) produced = scanJobDir(jobDir);   // 上报缺失才扫本任务独占目录
                     if (produced.isEmpty()) {
                         dPostState(id, "error", null, "下载结束但没找到产出文件：可能是存储权限受限（我的保存页顶部可去授权）或目录被系统清理，重试一次", null);
                     } else {
+                        // B 站等站对未登录用户只给「预览图轮播」（playurl 被风控，拿不到视频流），
+                        // yt-dlp 会把这组预览图当产物下满——预期视频的任务若只产出图片，按失败处理
+                        // 并引导登录，绝不让用户拿一打截图当"下载成功"（真正的图集站走 App 内采集通道，不进这里）
+                        boolean onlyImages = true;
+                        for (String n : produced) if (!isImageName(n)) { onlyImages = false; break; }
+                        if (onlyImages) {
+                            dPostState(id, "error", null, "该站点没有提供视频流（未登录时部分站点只给预览图）。设置 → 登录信息管理 里登录后重试", null);
+                        } else {
                         ArrayList<String> fin = new ArrayList<>();
-                        for (String n : produced) fin.add(isVideoName(n) ? eng.normalizeVideo(n, id, t.lastTitle) : n);
+                        for (String n : produced) {
+                            String moved = eng.moveToRoot(jobDir, n);
+                            if (moved == null) continue;
+                            // 抖音片尾推广自动裁剪（v1.39）：API 时长拿不到（守护路径），走静态尾巴检测
+                            if (isVideoName(moved) && t.url != null && t.url.contains("douyin")) {
+                                moved = eng.trimDouyinTail(moved, id, 0);
+                            }
+                            fin.add(isVideoName(moved) ? eng.normalizeVideo(moved, id, t.lastTitle) : moved);
+                        }
+                        if (fin.isEmpty()) {
+                            dPostState(id, "error", null, "下载结束但产出文件搬移失败，重试一次", null);
+                        } else {
                         java.util.Collections.sort(fin);
                         eng.scanToGallery(fin);
                         eng.markOwned(fin);
                         eng.ensureThumbs(fin);
+                        // 标题发原始描述（v1.39）：页面端 cleanTitle 取正文、tagLine 取 #话题做第二行
                         dPostState(id, "done", t.lastTitle != null ? t.lastTitle : titleFromName(fin.get(0)), null, new JSONArray(fin).toString());
+                        }
+                        }
                     }
                 } catch (Throwable e) {
                     dPostState(id, "error", null, String.valueOf(e.getMessage()), null);
                 } finally {
+                    deleteRecursive(jobDir);   // 收尾清理（分轨残件 / .aria2 控制文件 / 没搬动的文件）
                     t.eng.slots.release();
                 }
             }
@@ -1267,6 +1532,37 @@ public class LocalEngine {
                 staging.mkdirs();
                     postState(id, "parsing", "磁力：正在解析元数据…", null, null);
                     if (nativeDirPath == null) computeRuntimePaths();
+                    // ① 元数据快速通道（v1.39）：公共 .torrent 缓存直接拿种子文件——国内网络
+                    //    DHT/tracker 的 UDP 常被限速，元数据拿不到就什么都下不了；拿到 .torrent
+                    //    后 aria2c 只需要连节点传数据，起步快得多。拿不到再回纯磁力（DHT 慢慢磨）
+                    String torrentFile = null;
+                    java.util.regex.Matcher mh = java.util.regex.Pattern.compile("urn:btih:([a-fA-F0-9]{40})").matcher(magnet);
+                    if (mh.find()) {
+                        try {
+                            HttpURLConnection c = (HttpURLConnection) new URL("https://itorrents.org/torrent/" + mh.group(1).toUpperCase(java.util.Locale.ROOT) + ".torrent").openConnection();
+                            c.setConnectTimeout(8000);
+                            c.setReadTimeout(15000);
+                            c.setInstanceFollowRedirects(true);
+                            c.setRequestProperty("User-Agent", UA_ENGINE);
+                            if (c.getResponseCode() == 200) {
+                                java.io.ByteArrayOutputStream mb = new java.io.ByteArrayOutputStream();
+                                InputStream mi = c.getInputStream();
+                                byte[] mbuf = new byte[16384];
+                                int mn;
+                                while (mb.size() < 20971520 && (mn = mi.read(mbuf)) > 0) mb.write(mbuf, 0, mn);
+                                mi.close();
+                                byte[] mbb = mb.toByteArray();
+                                if (mbb.length > 200 && mbb[0] == 'd') {   // bencode 字典开头才是真种子
+                                    File tf = new File(staging, "meta.torrent");
+                                    FileOutputStream mo = new FileOutputStream(tf);
+                                    mo.write(mbb);
+                                    mo.close();
+                                    torrentFile = tf.getAbsolutePath();
+                                    postState(id, "parsing", "磁力：已取到种子信息，正在连接节点…", null, null);
+                                }
+                            } else c.disconnect();
+                        } catch (Throwable ignored) {}
+                    }
                     List<String> args = new ArrayList<>();
                     args.add(aria2cBin());
                     args.add("--dir=" + staging.getAbsolutePath());
@@ -1276,7 +1572,9 @@ public class LocalEngine {
                     args.add("--console-log-level=notice");
                     args.add("--enable-dht=true");
                     args.add("--enable-dht6=false");
+                    args.add("--dht-entry-point=router.bittorrent.com:6881");
                     args.add("--bt-enable-lpd=true");
+                    args.add("--enable-peer-exchange=true");
                     args.add("--listen-port=51413-51423");
                     args.add("--dht-listen-port=51413-51423");
                     args.add("--split=8");
@@ -1286,7 +1584,7 @@ public class LocalEngine {
                     args.add("--user-agent=Transmission/2.94");
                     if (sslCertPath != null) args.add("--ca-certificate=" + sslCertPath);   // https tracker 需要
                     args.add("--bt-tracker=" + joinTrackers());
-                    args.add(magnet);
+                    args.add(torrentFile != null ? torrentFile : magnet);
                     // 环境必须与 SSR 快通道一致：libaria2c.so 的依赖库在 packages/aria2c/usr/lib，
                     // 不设 LD_LIBRARY_PATH 进程可能直接起不来（磁力"解析失败"的根因）
                     ProcessBuilder pb = new ProcessBuilder(args).redirectErrorStream(true);
@@ -1335,7 +1633,9 @@ public class LocalEngine {
                         if (System.currentTimeMillis() - ref > 600000) {
                             p.destroyForcibly();
                             postState(id, "error", null, lastProgressAt[0] == 0
-                                ? "磁力元数据解析超时（10 分钟没有可用源）：该资源可能已无做种或太冷门，建议换一个链接或稍后再试"
+                                ? (torrentFile != null
+                                    ? "已取到种子信息，但 10 分钟没连上可用节点：该资源可能已无做种，建议换一个链接或稍后再试"
+                                    : "磁力元数据解析超时（10 分钟没有可用源）：该资源可能已无做种或太冷门，建议换一个链接或稍后再试")
                                 : "磁力下载超时（10 分钟没有收到新数据）：做种已断或太冷门，建议换一个链接或稍后再试", null);
                             deleteRecursive(staging);
                             btProcs.remove(id);
@@ -1349,6 +1649,11 @@ public class LocalEngine {
                     if (code != 0) {
                         deleteRecursive(staging);
                         String reason = tail[0].trim().replace('\n', ' ');
+                        // 模拟器/转译层跑不了 ARM BT 引擎（真机不受影响）：别把一长串链接器报错甩给用户
+                        if (reason.indexOf("CANNOT LINK EXECUTABLE") >= 0 || reason.indexOf("ndk_translation") >= 0) {
+                            postState(id, "error", null, "当前环境跑不了 BT 引擎（模拟器/转译层限制），真机上不受影响", null);
+                            return;
+                        }
                         if (reason.isEmpty()) reason = "可能是元数据解析失败或没有可用节点";
                         postState(id, "error", null, "磁力下载失败（退出码 " + code + "）：" + reason, null);
                         return;
@@ -1367,6 +1672,7 @@ public class LocalEngine {
                     final List<String> saved = new ArrayList<>();
                     for (File f : files) {
                         if (f.length() == 0) continue;
+                        if (f.getName().equals("meta.torrent")) continue;   // 元数据快速通道留下的种子文件，不是产物
                         String ext = extOf(f.getName());
                         String target = uniqueName(sanitizeName(f.getName().substring(0, Math.max(0, f.getName().length() - ext.length()))) + ext);
                         f.renameTo(new File(vdDir, target));
@@ -1409,14 +1715,15 @@ public class LocalEngine {
                     if (videos != null) for (int i = 0; i < videos.length(); i++) urls.add(videos.getString(i));
                     if (images != null) for (int i = 0; i < images.length(); i++) urls.add(images.getString(i));
                     if (urls.isEmpty()) { postState(id, "error", null, "采集到 0 条媒体：页面结构可能变了", null); return; }
-                    String base = sanitizeName(desc.isEmpty() ? "采集" : desc);
-                    postState(id, "downloading", base, null, null);
-                    List<String> saved = downloadMediaUrls(id, urls, base);
+                    String fileBase = sanitizeName(desc.isEmpty() ? "采集" : desc);   // 文件名保留 #话题/@提及 全文
+                    String rawTitle = desc.isEmpty() ? fileBase : desc;               // 状态发原始描述：页面清洗出标题+话题行
+                    postState(id, "downloading", rawTitle, null, null);
+                    List<String> saved = downloadMediaUrls(id, urls, fileBase);
                     if (saved.isEmpty()) { postState(id, "error", null, "图片/视频都没下载下来：网络被掐或链接过期，重试一次", null); return; }
                     // 视频归一成 H.264 mp4（og:video/网页采集抓到的可能是 HEVC，部分手机解不了）——与守护进程路径行为一致
                     List<String> fin = new ArrayList<>();
-                    for (String n : saved) fin.add(isVideoName(n) ? normalizeVideo(n, id, base) : n);
-                    String title = fin.size() == urls.size() ? base : base + "（" + fin.size() + "/" + urls.size() + "）";
+                    for (String n : saved) fin.add(isVideoName(n) ? normalizeVideo(n, id, rawTitle) : n);
+                    String title = fin.size() == urls.size() ? rawTitle : rawTitle + "（" + fin.size() + "/" + urls.size() + "）";
                     postState(id, "done", title, null, new JSONArray(fin).toString());
                     scanToGallery(fin);
                     markOwned(fin);
@@ -1817,7 +2124,12 @@ public class LocalEngine {
                 String n = names.getString(i);
                 if (n.contains("/") || n.contains("\\") || n.contains("..")) continue;   // 防穿越
                 File f = new File(vdDir, n);
-                if (f.exists() && f.delete()) ok++; else err.append(n).append(' ');
+                if (f.exists() && f.delete()) {
+                    // 同步清掉媒体库里的行：光删文件会留孤儿行——图库里还挂着、部分 ROM（MIUI 等）
+                    // 还会弹"应用删除了图集"并把条目塞进图库回收站。有所有文件访问权限可直接删行，不进回收站
+                    purgeMediaRow(f);
+                    ok++;
+                } else err.append(n).append(' ');
             }
             out.put("ok", ok);
             out.put("error", err.length() == 0 ? "" : "未找到或删除失败: " + err.toString().trim());
@@ -1825,6 +2137,33 @@ public class LocalEngine {
             try { out.put("error", String.valueOf(e.getMessage())); } catch (Exception ignored) {}
         }
         return out.toString();
+    }
+
+    /** 按路径把文件对应的媒体库行删掉（Images/Video/Down­loads 三张表都试；有全文件权限时是硬删，不进回收站） */
+    private void purgeMediaRow(File f) {
+        try {
+            android.content.ContentResolver cr = ctx.getContentResolver();
+            String path = f.getAbsolutePath();
+            android.net.Uri[] tables = {
+                android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            };
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                tables = java.util.Arrays.copyOf(tables, 3);
+                tables[2] = android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI;
+            }
+            for (android.net.Uri table : tables) {
+                try {
+                    android.database.Cursor c = cr.query(table, new String[]{android.provider.BaseColumns._ID},
+                        android.provider.MediaStore.MediaColumns.DATA + "=?", new String[]{path}, null);
+                    while (c != null && c.moveToNext()) {
+                        long id = c.getLong(0);
+                        try { cr.delete(android.content.ContentUris.withAppendedId(table, id), null, null); } catch (Throwable ignored) {}
+                    }
+                    if (c != null) c.close();
+                } catch (Throwable ignored) {}
+            }
+        } catch (Throwable ignored) {}
     }
 
     // ---------- 小工具 ----------

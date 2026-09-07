@@ -498,6 +498,12 @@ public class MainActivity extends Activity {
                 }
             }, "vd-transcode").start();
         }
+        /** v2.44：查视频编码（h264/hevc/…）。页面打开视频先问这个——不是 h264/mpeg4 就先转码再播 */
+        @JavascriptInterface public String localProbe(final String name) {
+            if (name == null || name.contains("/") || name.contains("\\") || name.contains("..")) return "";
+            if (engine == null) return "";
+            try { return engine.probeVideoCodec(name); } catch (Throwable t) { return ""; }
+        }
         /** 预热抖音访问凭证（无需登录；完成后推 window.onWarmDone） */
         @JavascriptInterface public void localWarmDouyin() { warmDouyin(); }
 

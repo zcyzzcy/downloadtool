@@ -333,11 +333,12 @@ public class LocalEngine {
         return false;
     }
 
-    /** 生成一个视频的封面：mmr（快）→ ffmpeg（稳）。已有封面直接跳过 */
+    /** 生成一个视频的封面：mmr（快）→ ffmpeg（稳）。已有且健康的封面直接跳过
+     *  （v2.44：旧文件 <1.5KB 视为损坏——曾被写坏过的封面不再永远挡着重新生成） */
     private void genThumb(File dir, String name) {
         try {
             File out = new File(new File(dir, ".thumbs"), name + ".jpg");
-            if (out.isFile() && out.length() > 0) return;
+            if (out.isFile() && out.length() >= 1536) return;
             new File(dir, ".thumbs").mkdirs();
             File src = new File(dir, name);
             if (!src.isFile() || src.length() == 0 || !isVideoName(name)) return;
@@ -502,6 +503,19 @@ public class LocalEngine {
             } catch (Throwable ignored) {}
         }
         return out;
+    }
+
+    /** v2.44：给页面查视频编码（h264/hevc/…）。打开视频先看这个——不是 h264/mpeg4 就先转码再播，
+     *  不再赌"播放后帧数检测"（个别 ROM 的 WebView 会谎报解码帧数，黑屏检测永远不触发） */
+    public String probeVideoCodec(String name) {
+        try {
+            File in = new File(vdDir, name);
+            if (!in.isFile() || !isVideoName(name)) return "";
+            String[] p = probeMedia(in.getAbsolutePath());
+            return p != null ? p[0] : "";
+        } catch (Throwable t) {
+            return "";
+        }
     }
 
     /** 视频归一成 H.264/AAC 的 mp4。已合规原样返回名；容器不对→秒级 remux；编码不对→转码。

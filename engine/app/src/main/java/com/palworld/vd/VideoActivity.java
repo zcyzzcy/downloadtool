@@ -604,19 +604,15 @@ public class VideoActivity extends Activity {
         return v;
     }
 
-    /** 圆形图标按钮（返回/播放/⋮）：与底部药丸同一套玻璃风（v1.39 统一——
-     *  之前播放键是暗底、药丸是亮玻璃，两种风格混在一起很突兀） */
+    /** 圆形图标按钮（返回/播放/⋮）：v2.43 去掉玻璃圆底——用户反馈底圈在部分 ROM 上很突兀，
+     *  改成纯白色字形 + 轻投影，任何背景下都干净 */
     private TextView circle(String t, float sizeSp, int dimDp, View.OnClickListener l) {
         TextView v = new TextView(this);
         v.setText(t);
         v.setTextColor(0xFFFFFFFF);
         v.setTextSize(sizeSp);
         v.setGravity(Gravity.CENTER);
-        GradientDrawable g = new GradientDrawable();
-        g.setShape(GradientDrawable.OVAL);
-        g.setColor(0x2EFFFFFF);
-        g.setStroke(dp(1), 0x45FFFFFF);
-        v.setBackgroundDrawable(g);
+        v.setShadowLayer(dp(3), 0, dp(1), 0x99000000);
         v.setOnClickListener(l);
         v.setLayoutParams(new LinearLayout.LayoutParams(dp(dimDp), dp(dimDp)));
         return v;
@@ -718,15 +714,10 @@ public class VideoActivity extends Activity {
         LinearLayout.LayoutParams w2 = new LinearLayout.LayoutParams(-2, -2);
 
         playIco = new PlayIcon(this);
-        // 播放/暂停键：自绘矢量图标（v1.40）——▶/⏸ 字形在部分 ROM 字体上会渲染成彩色 emoji，
-        // 蓝色实心圆和旁边的玻璃圆钮完全是两个画风；用 Path 画白色三角/双竖条，风格彻底统一
+        // 播放/暂停键：自绘矢量图标（v1.40）——▶/⏸ 字形在部分 ROM 字体上会渲染成彩色 emoji。
+        // v2.43：不再垫玻璃圆环（用户反馈圈底突兀），白色图标直接放在底栏渐变上
         FrameLayout playBtn = new FrameLayout(this);
         playBtn.setBackgroundResource(0);
-        GradientDrawable pg = new GradientDrawable();
-        pg.setShape(GradientDrawable.OVAL);
-        pg.setColor(0x2EFFFFFF);
-        pg.setStroke(dp(1), 0x45FFFFFF);
-        playBtn.setBackgroundDrawable(pg);
         playBtn.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { togglePlay(); } });
         playBtn.addView(playIco, new FrameLayout.LayoutParams(-1, -1));
         playBtn.setLayoutParams(new LinearLayout.LayoutParams(dp(42), dp(42)));
@@ -827,7 +818,9 @@ public class VideoActivity extends Activity {
         cueV.animate().cancel();
         cueV.setAlpha(1f);
         h.removeCallbacks(cueHideR);
-        if (ms > 0) h.postDelayed(cueHideR, ms);
+        // v2.43：ms<=0（"加载中…"这类状态提示）也必须自动消失——之前会一直蹲在屏幕中央，
+        // 用户看到的就是"画面中间一个圆角矩形框"。上限 2.5 秒，真正要紧的提示走别的 UI
+        h.postDelayed(cueHideR, ms > 0 ? ms : 2500);
     }
 
     private final Runnable cueHideR = new Runnable() { @Override public void run() { cueV.setVisibility(View.GONE); } };

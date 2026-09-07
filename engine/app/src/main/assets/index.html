@@ -119,7 +119,7 @@
   .hthw .mth-bg { filter:blur(5px) brightness(.8); }
   .mthw.nothumb::before, .hthw.nothumb::before { content:'🎬'; position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:24px; opacity:.4; }
   .mthw .mth { position:relative; width:100%; aspect-ratio:16/10; object-fit:contain; display:block; }
-  .mthw::after { content:'▶'; position:absolute; right:6px; bottom:6px; width:26px; height:26px; border-radius:50%; background:rgba(17,20,28,.55); color:#fff; font-size:11px; display:flex; align-items:center; justify-content:center; }
+  .mthw::after { content:''; position:absolute; right:11px; bottom:16px; width:0; height:0; border-top:5.5px solid transparent; border-bottom:5.5px solid transparent; border-left:9px solid #fff; }   /* 播放角标画成三角（v2.43）：▶ 字形在部分 ROM 渲染成彩色 emoji */
   .mthw.img::after { content:none; }   /* 图片不显示播放角标（否则图集看着像视频） */
   .hm-saved { color:var(--brand-deep); font-weight:500; }
   .hm-unsaved { color:#b98c2e; font-weight:500; }
@@ -134,14 +134,15 @@
   #app-confirm .ac-cancel { background:#f2f4f9; color:var(--soft); box-shadow:none; }
   #app-confirm .ac-ok { background:var(--err); color:#fff; box-shadow:0 4px 12px rgba(229,72,77,.3); }
   .mcard .mt { flex:1; min-width:0; display:flex; flex-direction:column; padding:2px 2px 0 0; }
-  .mcard .mn { font-size:12.5px; font-weight:500; line-height:1.5; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .mcard .mn { font-size:12.5px; font-weight:500; line-height:1.5; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; padding-right:30px; }
   .mcard .mm { font-size:11.5px; color:var(--muted); margin-top:auto; padding-top:6px; }
-  .mchips { display:flex; flex-wrap:wrap; gap:2px; margin-top:7px; }
-  /* v2.38 首页统一记录格式：标题下的 #话题行（@提及一律不显示） */
+   /* v2.38 首页统一记录格式：标题下的 #话题行（@提及一律不显示） */
   .mcard .mtags { font-size:11px; color:var(--brand-deep); opacity:.8; margin-top:3px; line-height:1.45; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; word-break:break-all; }
   /* 类型徽标：视频·时长 / 图片 / 图集·N张 / 图文 */
   .mcard .tbadge { display:inline-block; padding:1.5px 7px; border-radius:7px; background:#eaf0ff; color:var(--brand-deep); font-size:10.5px; font-weight:600; margin-right:6px; vertical-align:1px; }
   .mcard .tbadge.pbadge { background:#e8f7ef; color:#1f9d63; }   /* 平台徽标（v2.42）：绿色系，和类型徽标一眼区分 */
+  .mcard .rmx { position:absolute; top:7px; right:8px; width:26px; height:26px; border-radius:50%; border:0; background:transparent; color:#e5484d; font-size:15px; line-height:26px; padding:0; cursor:pointer; }
+  .mcard .rmx:active { background:#fdecec; }   /* 移除键（v2.43）：右上角红叉，平时轻、按下有底色 */
   /* 来源链接行：一行放不下省略号，点一下复制 */
   .mcard .murl { font-size:10.5px; color:var(--muted); opacity:.75; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
   /* 播放页（=详情页）第二行：#话题（@提及不显示） */
@@ -301,10 +302,19 @@
   .gd-cell img { max-width:100%; max-height:100%; object-fit:contain; -webkit-user-select:none; user-select:none; }
   .gd-cell img.zoom { transition:transform .18s ease; }
   /* 底部全宽分段进度条：当前及之前的段点亮（抖音图集样式） */
-  #gd-prog { display:flex; gap:4px; padding:0 16px calc(10px + env(safe-area-inset-bottom)); transition:opacity .2s; }
-  #gd-prog span { flex:1; height:3px; border-radius:2px; background:rgba(255,255,255,.28); transition:background .25s; }
-  #gd-prog span.on { background:#fff; }
-  #view-gdetail.nohud #gd-top, #view-gdetail.nohud #gd-prog { opacity:0; pointer-events:none; }
+ #gd-prog { display:none; }   /* v2.43：分段进度条退役，由 #gd-thumbs 缩略图条接替 */
+ #gd-thumbs { display:flex; gap:6px; padding:8px 12px 4px; overflow-x:auto; background:#000; scrollbar-width:none; }
+ #gd-thumbs::-webkit-scrollbar { display:none; }
+ #gd-thumbs .gdth { flex:none; width:52px; height:52px; border-radius:8px; overflow:hidden; border:2px solid transparent; padding:0; background:#1a1a1a; cursor:pointer; }
+ #gd-thumbs .gdth img { width:100%; height:100%; object-fit:cover; display:block; }
+ #gd-thumbs .gdth.cur { border-color:#5b8cff; }   /* 当前那张高亮圈 */
+ #gd-info { background:#fff; border-radius:18px 18px 0 0; padding:14px 16px calc(12px + env(safe-area-inset-bottom)); }
+ #gd-info-title { font-size:14.5px; font-weight:700; line-height:1.55; color:var(--text); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+ #gd-info-tags { font-size:12px; color:var(--brand-deep); opacity:.85; margin-top:5px; line-height:1.5; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+ #gd-info-meta { margin-top:8px; font-size:11.5px; color:var(--muted); }
+ #gd-info-meta .tbadge { display:inline-block; padding:1.5px 7px; border-radius:7px; background:#eaf0ff; color:var(--brand-deep); font-size:10.5px; font-weight:600; margin-right:6px; vertical-align:1px; }
+ #gd-info-meta .tbadge.pbadge { background:#e8f7ef; color:#1f9d63; }
+ #view-gdetail.nohud #gd-top, #view-gdetail.nohud #gd-thumbs { opacity:0; pointer-events:none; }
 
   /* ---------- 视频详情页（封面预览 + 两行信息 + 操作；播放走原生播放器） ---------- */
   /* 设置页分区标题 */
@@ -351,10 +361,6 @@
   <!-- ================ 首页：下载 + 预览 ================ -->
   <section class="view on" id="view-home">
     <div id="engine-bar" style="display:none;margin-bottom:10px;padding:11px 13px;border-radius:12px;background:#fdecec;border:1px solid #f5c2c7;font-size:12.5px;color:#c0392b;line-height:1.7"></div>
-    <div class="top">
-      <span class="logo">📥</span>
-      <span class="name">视频下载器</span>
-    </div>
     <div class="hero">
       <textarea id="url" placeholder="粘贴一个或多个分享链接 / 磁力链接（多链接换行分隔，批量下载）…" enterkeyhint="go"
              autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
@@ -363,6 +369,10 @@
         <button onclick="clearInput()">✕ 清空</button>
       </div>
       <button class="big-btn" onclick="submit()">解析</button>
+      <!-- 引擎预载进度（v2.43）：开机后台预热解析引擎时在解析键下跑一条进度，就绪即消失 -->
+      <div id="preload-bar" style="display:none;margin-top:9px;height:4px;border-radius:4px;background:#e6ebf5;overflow:hidden">
+        <div id="preload-fill" style="height:100%;width:18%;border-radius:4px;background:linear-gradient(90deg,#5b8cff,#7aa7ff);transition:width .5s"></div>
+      </div>
     </div>
     <div id="clipbar" class="clipbar" style="display:none" onclick="fillFromClipbar()">
       <span class="clipico">📋</span><span id="clipbar-text" class="cliptx"></span><span class="clipgo">填入 ›</span>
@@ -384,8 +394,11 @@
       <button class="mrow" onclick="subView('settings')">
         <span class="mi c6">⚙️</span>设置<span class="mv" id="sd-short"></span><span class="arw">›</span>
       </button>
+      <button class="mrow" onclick="subView('donemem')">
+        <span class="mi c4">🔗</span>已下载链接记忆<span class="mv" id="dlmem-n"></span><span class="arw">›</span>
+      </button>
       <button class="mrow" onclick="subView('about')">
-        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.42</span><span class="arw">›</span>
+        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.43</span><span class="arw">›</span>
       </button>
     </div>
   </section>
@@ -399,7 +412,7 @@
     <div class="card" style="font-size:12.5px;color:var(--soft);line-height:2">
       纯离线单机版视频/图集下载器：抖音、B站、微博、小红书等站点的视频、图集与磁力下载，
       解析 / 下载 / 转码全部在本机完成——无服务器、不上传任何数据。<br>
-      网页 v2.42 · App 壳 v1.42（code 44）
+      网页 v2.43 · App 壳 v1.43（code 45）
     </div>
     <div class="menu" style="margin-top:12px">
       <button class="mrow" onclick="subView('src')">
@@ -498,9 +511,6 @@
       <button class="mrow" onclick="subView('login')">
         <span class="mi c3">🔑</span>登录信息管理<span class="mv" id="ck-short">检查中…</span><span class="arw">›</span>
       </button>
-      <button class="mrow" onclick="subView('donemem')">
-        <span class="mi c4">🔗</span>已下载链接记忆<span class="mv" id="dlmem-n"></span><span class="arw">›</span>
-      </button>
     </div>
   </section>
 
@@ -530,12 +540,13 @@
     </div>
   </section>
 
-  <!-- ================ 子页：已下载链接记忆（标题+链接列表，可查详情/复制/批量删） ================ -->
+  <!-- ================ 子页：已下载链接记忆（标题+链接列表，可查详情/复制/批量删/一键清空） ================ -->
   <section class="view" id="view-donemem">
     <div class="sub-head">
-      <button class="back" onclick="subView('settings')">‹ 设置</button>
+      <button class="back" onclick="subView('mine')">‹ 我的</button>
       <span class="st">已下载链接记忆</span>
       <button class="mini" id="mmg-btn" onclick="toggleMemManage()">管理</button>
+      <button class="mini" style="color:#e5484d" onclick="clearAllMem()">清空全部</button>
     </div>
     <div class="lib-bar">
       <input id="mem-q" placeholder="搜标题或链接…" oninput="memSearchDeb()" style="flex:1;padding:11px 13px;min-width:0;">
@@ -590,7 +601,7 @@
   <div id="iv-hint">左右滑切换 · 双指缩放 · 双击放大 · 下滑关闭</div>
 </div>
 
-<!-- 图集详情页（抖音式：左右拼接滑动翻页 + 底部全宽分段进度条 + 双击/双指缩放） -->
+<!-- 图集详情页（v2.43：左右拼接滑动翻页 + 底部缩略图条(点击跳图) + 图片信息区(仿视频详情)） -->
 <section class="view" id="view-gdetail">
   <div id="gd-top">
     <button class="gd-back" onclick="gdBack()">‹</button>
@@ -598,7 +609,12 @@
     <span id="gd-count"></span>
   </div>
   <div id="gd-stage"><div id="gd-track"></div></div>
-  <div id="gd-prog"></div>
+  <div id="gd-thumbs"></div>
+  <div id="gd-info">
+    <div id="gd-info-title"></div>
+    <div id="gd-info-tags"></div>
+    <div id="gd-info-meta"></div>
+  </div>
 </section>
 
 <!-- 视频详情页：封面预览 + 标题(第一行)/信息(第二行) + 来源 + 操作；播放走原生播放器（系统解码器，HEVC 也有画面） -->
@@ -627,7 +643,7 @@
     <div id="pnov">
       <div class="pn-t">这个视频的画面编码本页播不了<br>（声音正常、没有画面）</div>
       <div class="pn-d">文件本身是完好的</div>
-      <button class="pbtn-save" onclick="openSysPlayer()">▶ 用系统播放器打开</button>
+      <button class="pbtn-save" onclick="openSysPlayer()">用系统播放器打开</button>
     </div>
     <div id="vsl"><div class="vs-ico">☀️</div><div class="vs-track"><div class="vs-fill" style="height:55%"></div></div><div class="vs-num">55%</div></div>
     <div id="bar-bub">0:00</div>
@@ -660,10 +676,7 @@
       <span class="vs-tx" id="player-src-tx"></span><span class="vs-go">复制链接</span>
     </div>
     <div class="pinfo-acts">
-      <button id="player-toggle2" class="pbtn-save" onclick="togglePlayV2()">⏸ 暂停</button>
-      <button class="pbtn-del" onclick="playerCopyTitle()">复制标题</button>
-      <button class="pbtn-del" onclick="playerHideRec()">删记录</button>
-      <button class="pbtn-del" onclick="playerDelete()">删除文件</button>
+      <button id="player-toggle2" class="pbtn-save" onclick="togglePlayV2()">暂停</button>
       <button class="pbtn-del" onclick="openSysPlayer()">系统播放器</button>
     </div>
   </div>
@@ -763,7 +776,8 @@ function showView(v) {
   applyView(v);
 }
 function subView(v) { showView(v); }
-// 返回键/浏览器后退：按历史栈回到上一视图；浮层（图片查看/目录选择）开着就先关浮层
+// 返回键/浏览器后退：浮层（图片查看/目录选择/记忆详情）开着就先关浮层；
+// 批量管理模式开着就先退批量（留在本页）——再按一次返回才走正常的历史栈回上一页
 window.addEventListener('popstate', e => {
   const iv = document.getElementById('imgview');
   if (iv && iv.classList.contains('on')) ivClose();
@@ -771,6 +785,7 @@ window.addEventListener('popstate', e => {
   if (dp && dp.classList.contains('on')) dpClose();
   const md = document.getElementById('memdetail');
   if (md && md.style.display === 'flex') memClose();
+  if (manage || hManage || mManage) { exitManage(); return; }   // 第一次返回=退批量，本页不动
   applyView((e.state && e.state.v) || 'home');
 });
 
@@ -960,6 +975,7 @@ function previewTaskAt(id, idx) {
   const t = localTaskById(id);
   if (!t || !t.file) return;
   const files = (t.files && t.files.length) ? t.files : [t.filename || safeName(t.file)];
+  window.__plUrl = t.url || '';   // 详情页（视频/图集）的平台徽标从这里取
   openPlayerSet(files, idx, cleanTitle(t.title), t.raw);   // 带上任务标题+原始描述（标题没有就落回文件名）
 }
 // 类型徽标（v2.38）：视频·时长 / 图片 / 图集·N张 / 图文·N图M视频 —— 从实际产出文件判断，不看下载通道
@@ -971,30 +987,23 @@ function typeBadge(t, imgs, vids) {
   return '视频' + (t && t.dur ? ' · ' + fmtDur(t.dur) : '');
 }
 // 来源平台（v2.42）：首页卡片直接复用 1318 行的 platformOf（链接→平台显示名，认不出显示域名）
-// 已完成任务行（v2.42 纯文字版）：不再放缩略图 —— 标题 / #话题 / 平台·类型·大小 / 来源链接，
-// 点击整条进详情（视频→播放详情页，图集/图片→预览）；平台+类型都在徽标行里一眼可辨
+// 已完成任务行（v2.43）：纯文字 —— 标题 / #话题 / 平台·类型·大小；不放缩略图、不放链接、
+// 不放 1234 序号（图集/多视频整条点进去看）；「✕ 移除」挪到卡片右上角，红叉更醒目
 function doneRow(t) {
   const files = (t.files && t.files.length) ? t.files : [t.filename];
-  const multi = files.length > 1;
   const imgs = files.filter(isImgName);
   const vids = files.filter(f => !isImgName(f));
   const sel = homeSel.has(t.id);
   const badge = typeBadge(t, imgs, vids);
   const plat = platformOf(t.url);
   const tags = tagLine(t.raw || t.title || '');
-  const chips = multi ? `<span class="mchips">${files.map((f, i) =>
-    `<a class="dl" href="javascript:void(0)" title="${esc(f)}" onclick="event.stopPropagation();previewTaskAt('${t.id}',${i})">${i + 1}</a>`).join('')}</span>` : '';
   return `<div class="mcard${sel ? ' sel' : ''}" onclick="homeCardClick('${t.id}')">
     <span class="msel">${sel ? '✓' : ''}</span>
+    <button class="rmx" title="移除这条记录" onclick="event.stopPropagation();del('${t.id}')">✕</button>
     <span class="mt">
       <span class="mn">${esc(t.title || t.filename)}</span>
       ${tags ? `<span class="mtags">${esc(tags)}</span>` : ''}
-      ${chips}
       <span class="mm">${plat ? `<span class="tbadge pbadge">${esc(plat)}</span>` : ''}<span class="tbadge">${esc(badge)}</span>${t.sizeMB ? esc(String(t.sizeMB)) + ' MB' : ''}</span>
-      ${t.url ? `<span class="murl" title="${esc(t.url)}" onclick="event.stopPropagation();copyText(this.title)">${esc(t.url)}</span>` : ''}
-      <span class="tacts">
-        <button class="del" onclick="event.stopPropagation();del('${t.id}')">✕ 移除</button>
-      </span>
     </span>
   </div>`;
 }
@@ -1096,18 +1105,19 @@ function renderLib() {
         <span class="msel">${allSel ? '✓' : ''}</span>
         ${gminiHtml(r)}
         <span class="ht">
-          <span class="hn" title="${esc(r.gkey)}">${esc(r.gkey)}<span style="color:var(--brand-deep);font-weight:600"> · ${r.isImg ? '图集' : '合集'}</span></span>
+          <span class="hn" title="${esc(r.gkey)}">${esc(cleanTitle(r.gkey) || r.gkey)}<span style="color:var(--brand-deep);font-weight:600"> · ${r.isImg ? '图集' : '合集'}</span></span>
           <span class="hm">${fmtDate(mt)} · ${r.isImg ? r.items.length + ' 张图' : r.items.length + ' 个视频'} · ${totalMB} MB</span>
         </span>
         <span class="hacts"><button class="del" onclick="event.stopPropagation();lpHideCard(this)">删记录</button><button class="del" onclick="event.stopPropagation();lpDelCard(this)">删除</button></span>
       </div>`;
     }
     const i = r.item;
+    const dispN = cleanTitle(i.name.replace(/\.[^.]+$/, '')) || i.name.replace(/\.[^.]+$/, '');   // v2.43：只显示正文标题，#话题/@尾巴不进列表
     return `<div class="hrow${manage && selSet.has(i.name) ? ' sel' : ''}" data-name="${esc(i.name)}" data-kind="file" onclick="openLibRow(${idx})">
       <span class="msel">${manage && selSet.has(i.name) ? '✓' : ''}</span>
       ${thumbBox(i.name, 1)}
       <span class="ht">
-        <span class="hn" title="${esc(i.name.replace(/\.[^.]+$/, ''))}">${esc(i.name.replace(/\.[^.]+$/, ''))}</span>
+        <span class="hn" title="${esc(dispN)}">${esc(dispN)}</span>
         <span class="hm">${fmtDate(i.mtime)} · ${i.sizeMB} MB</span>
       </span>
       <span class="hacts"><button class="del" onclick="event.stopPropagation();lpHideCard(this)">删记录</button><button class="del" onclick="event.stopPropagation();lpDelCard(this)">删除</button></span>
@@ -1159,8 +1169,13 @@ function mgBarSync() {
   document.getElementById('mg-file').style.display = manage ? '' : 'none';
   document.getElementById('mg-hide').textContent = manage ? '删记录' : '删除记录';
   document.body.classList.toggle('mg', on);   // 垫高页面底部，批量栏不再盖住列表最后一行
+  try { if (bridgeOk('setBackOverride')) AndroidBridge.setBackOverride(on ? 1 : 0); } catch (e) {}   // v2.43：告诉壳返回键要先退批量
   updMgN();
 }
+// 壳的返回键/手势返回在批量模式下回调这里（v2.43）：只退批量模式，页面不切走
+window.__backExitManage = function () {
+  if (manage || hManage || mManage) { exitManage(); toast('已退出批量管理'); }
+};
 function resetLibManage() {
   if (!manage) return;
   manage = false; selSet.clear();
@@ -1347,6 +1362,16 @@ function memRowClick(i) {
   }
   memDetail(i);
 }
+// 一键清空链接记忆（v2.43）：确认后整表清掉，不影响任何已下载文件
+function clearAllMem() {
+  if (mManage) { toast('先退出管理模式再清空'); return; }
+  if (!doneListRaw().length) { toast('没有可清空的记录'); return; }
+  appConfirm('清空全部', '删除全部 ' + doneListRaw().length + ' 条链接记忆？\n已下载的文件不受影响，只清记忆列表。', '清空', () => {
+    saveDoneList([]);
+    loadMem(); renderSettings();
+    toast('已清空全部链接记忆');
+  });
+}
 function memDetail(i) {
   const r = (window.__memRows || [])[i];
   if (!r) return;
@@ -1390,10 +1415,10 @@ function openPlayerSet(names, idx, title, raw) {
   const disp = title || name.replace(/\.[^.]+$/, '');
   window.__plTitle = title || '';    // 任务标题（有就盖过文件名；翻到别的文件时让位给文件名）
   window.__plRaw = raw || '';        // 原始描述（第二行 #话题从这里提取）
-  // 图片 → 图集详情页（抖音式左右拼接翻页 + 底部全宽进度条）
+  // 图片 → 图集详情页（左右拼接翻页 + 底部缩略图条 + 图片信息区，v2.43 与视频详情同款风格）
   if (isImgName(name)) {
     const imgs = names.filter(isImgName);
-    gdOpen(imgs, Math.max(0, imgs.indexOf(name)), disp);
+    gdOpen(imgs, Math.max(0, imgs.indexOf(name)), disp, window.__plRaw, window.__plUrl || '');
     return;
   }
   // 视频 → 播放页=详情页：页面内直接播（v1.39 需求）。WebView 解不了的编码（HEVC 等，
@@ -1515,7 +1540,7 @@ function togglePlayV2() {
   togglePlayV();
   const v = document.getElementById('player-video');
   const b = document.getElementById('player-toggle2');
-  if (b) b.textContent = v.paused ? '▶ 播放' : '⏸ 暂停';
+  if (b) b.textContent = v.paused ? '播放' : '暂停';   // v2.43：不放 ▶/⏸ 字形——部分 ROM 会渲染成彩色 emoji
 }
 function playerCopySrc() { if (window.__plSrc) copyText(window.__plSrc.u); }
 function playerCopyTitle() { copyText(document.getElementById('player-title').textContent); }
@@ -1779,8 +1804,8 @@ function closePlayer() { if (curView === 'player') leavePlayer(); }
     }
   });
   function keepOn(on) { try { if (bridgeOk('setKeepScreenOn')) AndroidBridge.setKeepScreenOn(on); } catch (e) {} }
-  v.addEventListener('play', () => { document.getElementById('pp-toggle').classList.add('pausing'); const b2 = document.getElementById('player-toggle2'); if (b2) b2.textContent = '⏸ 暂停'; showHud(); keepOn(true); });
-  v.addEventListener('pause', () => { document.getElementById('pp-toggle').classList.remove('pausing'); const b2 = document.getElementById('player-toggle2'); if (b2) b2.textContent = '▶ 播放'; saveProgress(); showHud(); keepOn(false); });
+  v.addEventListener('play', () => { document.getElementById('pp-toggle').classList.add('pausing'); const b2 = document.getElementById('player-toggle2'); if (b2) b2.textContent = '暂停'; showHud(); keepOn(true); });
+  v.addEventListener('pause', () => { document.getElementById('pp-toggle').classList.remove('pausing'); const b2 = document.getElementById('player-toggle2'); if (b2) b2.textContent = '播放'; saveProgress(); showHud(); keepOn(false); });
   v.addEventListener('waiting', () => { if (!ppSeeking) cue('加载中…', true, 0); });
   // 原生视频全屏退出（返回键/系统按钮）= 回到播放页内继续播（详情在下方），不关播放页
   v.addEventListener('webkitendfullscreen', () => { if (curView === 'player') showHud(); });
@@ -2122,16 +2147,33 @@ let gdScale = 1, gdTX = 0, gdTY = 0;
 function gdStageW() { const s = document.getElementById('gd-stage'); return s ? (s.clientWidth || 1) : 1; }
 function gdTrack() { return document.getElementById('gd-track'); }
 function gdCurImg() { return document.querySelector('#gd-track .gd-cell[data-i="' + gdIdx + '"] img'); }
-function gdOpen(names, idx, title) {
+function gdOpen(names, idx, title, raw, url) {
   gdList = (names || []).filter(Boolean).filter(isImgName);
   if (!gdList.length) return;
   gdFrom = curView;
   document.getElementById('gd-title').textContent =
     cleanTitle(String(title || '').replace(/\.[^.]+$/, '')) || (gdList[0] || '').replace(/\.[^.]+$/, '');
+  // v2.43 信息区（仿视频详情）：标题 / #话题 / 平台·类型·张数·大小
+  const iTitle = document.getElementById('gd-info-title');
+  const iTags = document.getElementById('gd-info-tags');
+  const iMeta = document.getElementById('gd-info-meta');
+  iTitle.textContent = cleanTitle(String(title || '')) || (gdList[0] || '').replace(/\.[^.]+$/, '');
+  const tg = tagLine(raw || '');
+  iTags.textContent = tg;
+  iTags.style.display = tg ? '' : 'none';
+  const plat = platformOf(url);
+  const vids = 0;
+  let mb = 0;
+  gdList.forEach(n => { const fi = fileInfoOf(n); if (fi && fi.sizeMB) mb += fi.sizeMB; });
+  const tbadge = gdList.length >= 2 ? '图集 · ' + gdList.length + ' 张' : '图片';
+  iMeta.innerHTML = (plat ? '<span class="tbadge pbadge">' + esc(plat) + '</span>' : '')
+    + '<span class="tbadge">' + tbadge + '</span>'
+    + (mb > 0 ? mb.toFixed(1) + ' MB' : '');
   history.pushState({ v: 'gdetail' }, '');
   applyView('gdetail');
   document.getElementById('view-gdetail').classList.remove('nohud');
   gdBuild();
+  gdThumbsBuild();
   gdGo(idx || 0, false);
 }
 function gdBack() {
@@ -2176,7 +2218,7 @@ function gdGo(i, animate) {
   gdZoomReset();
   gdLoadNear(i);
   document.getElementById('gd-count').textContent = gdList.length > 1 ? (i + 1) + ' / ' + gdList.length : '';
-  gdProgRender();
+  gdThumbsSync();
   gdPlace(animate);   // 轨道定位（视图没排完版时下一帧自动重试）
 }
 function gdPlace(animate) {
@@ -2192,16 +2234,27 @@ function gdPlace(animate) {
 // 转屏/沉浸栏变化导致舞台尺寸变了：重新贴齐当前页
 window.addEventListener('resize', () => { if (curView === 'gdetail') gdPlace(false); });
 function gdStep(d) { if (gdList.length > 1) gdGo(gdIdx + d, true); }
-// 底部全宽分段进度条：当前及之前的段点亮（图太多放不下就只留计数）
-function gdProgRender() {
-  const box = document.getElementById('gd-prog');
+// 底部缩略图条（v2.43，替代旧分段进度条）：每张一个方缩略图，点哪张跳哪张
+function gdThumbsBuild() {
+  const box = document.getElementById('gd-thumbs');
   if (!box) return;
-  const n = gdList.length;
-  if (n < 2 || n > 40) { box.innerHTML = ''; box.style.visibility = 'hidden'; return; }
-  box.style.visibility = '';
-  let h = '';
-  for (let i = 0; i < n; i++) h += '<span class="' + (i <= gdIdx ? 'on' : '') + '"></span>';
-  box.innerHTML = h;
+  if (gdList.length < 2) { box.innerHTML = ''; box.style.display = 'none'; return; }
+  box.style.display = '';
+  box.innerHTML = gdList.map((n, i) =>
+    `<button class="gdth" data-i="${i}" onclick="event.stopPropagation();gdGo(${i}, true)"><img alt="" loading="lazy" src="${esc(thumbUrl(n))}"></button>`).join('');
+}
+// 当前图变化：高亮对应缩略图并滚动到可视区
+function gdThumbsSync() {
+  const box = document.getElementById('gd-thumbs');
+  if (!box) return;
+  const cur = box.querySelector('.gdth.cur');
+  if (cur) cur.classList.remove('cur');
+  const el = box.querySelector('.gdth[data-i="' + gdIdx + '"]');
+  if (el) {
+    el.classList.add('cur');
+    const l = el.offsetLeft, r = l + el.offsetWidth;
+    if (l < box.scrollLeft || r > box.scrollLeft + box.clientWidth) box.scrollTo({ left: l - box.clientWidth / 2 + el.offsetWidth / 2, behavior: 'smooth' });
+  }
 }
 (function gdBind() {
   const st = document.getElementById('gd-stage');
@@ -2551,9 +2604,30 @@ function submitDouyinLocal(link, q) {
   localSubmitUrl(link, q);
   document.getElementById('url').value = '';
 }
+// v2.43 引擎预载进度条：页面起来就在解析键下开跑（假进度爬到 85% 封顶），
+// 引擎 ready/error 一到补满收起；浏览器预览（无桥）30 秒后自动收
+(function preloadBar() {
+  const bar = document.getElementById('preload-bar');
+  const fill = document.getElementById('preload-fill');
+  if (!bar || !fill) return;
+  let p = 10;
+  bar.style.display = '';
+  window.__plBarT = setInterval(() => {
+    p = Math.min(85, p + 3 + Math.random() * 6);
+    fill.style.width = p + '%';
+  }, 420);
+  window.__preloadDone = () => {
+    if (!window.__plBarT) return;
+    clearInterval(window.__plBarT); window.__plBarT = null;
+    fill.style.width = '100%';
+    setTimeout(() => { bar.style.display = 'none'; }, 520);
+  };
+  setTimeout(() => { if (window.__plBarT) window.__preloadDone(); }, 30000);
+})();
 window.onLocalState = function (id, state, title, error, filesJson) {
   if (id === null) {   // 引擎整体状态
     if (state === 'ready') {
+      if (window.__preloadDone) window.__preloadDone();
       LOCAL_ENGINE = true;   // 安静进入本地模式：不弹 toast、不亮提示条（出错才用红条提示）
       window.__engineDir = error || '';   // ready 时第 4 参=引擎详情（文件保存目录）
       updateStorageWarn();   // 私有目录时显示授权迁移横幅
@@ -2566,6 +2640,7 @@ window.onLocalState = function (id, state, title, error, filesJson) {
       return;
     }
     if (state === 'error') {
+      if (window.__preloadDone) window.__preloadDone();
       LOCAL_ENGINE = false;
       toast('本地引擎初始化失败：' + (error || '未知原因'));
       const eb = document.getElementById('engine-bar');
@@ -2645,7 +2720,7 @@ function progLine(t) {
 }
 // ---------- 设置：文件保存位置（只搬本 App 下载的文件，其他内容不动） ----------
 const SD_OPTS = [
-  { m: 'download', n: '下载/vd 文件夹', d: '集中存放，不与相册内容混在一起' },
+  { m: 'download', n: '下载/vd 文件夹', d: '' },
   { m: 'private', n: '应用私有目录', d: '' },
   { m: 'custom', n: '自定义…', d: '选手机上任意文件夹' },
 ];

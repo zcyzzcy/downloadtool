@@ -42,6 +42,7 @@ public class MainActivity extends Activity {
     private static final String LOCAL_HOST = "vd.local";
 
     private WebView web;
+    private volatile boolean pageManageOn = false;   // 页面批量管理模式开着：返回键先退批量（v2.43）
     private SharedPreferences prefs;
     private String pendingShare = null;   // 其他 App 分享进来的文本
     private LocalEngine engine;
@@ -357,6 +358,8 @@ public class MainActivity extends Activity {
 
     private class AppBridge {
         @JavascriptInterface public boolean isApp() { return true; }
+        /** v2.43：页面把"批量管理模式是否开着"同步给壳，返回键/手势返回据此先退批量再退页面 */
+        @JavascriptInterface public void setBackOverride(int on) { pageManageOn = on != 0; }
 
         /** 其他 App 分享进来的文本：页面启动时拉取一次 */
         @JavascriptInterface public String getShared() { return pendingShare == null ? "" : pendingShare; }
@@ -1132,18 +1135,36 @@ public class MainActivity extends Activity {
         customView = null;
     }
 
-    @Override
-    public boolean onKeyDown(int keyCode, KeyEvent event) {
-        // 全屏播放中按返回 = 退全屏（页面会自动关播放页），不能直接 goBack 否则双重返回
-        if (keyCode == KeyEvent.KEYCODE_BACK && customView != null) {
+    /** 返回键统一处理（v2.43）：全屏 > 批量管理模式（先退批量，绝不直接退 App） > 网页后退。
+     *  返回 false = 页面没消化，走系统默认（退出 App）。
+     *  手势返回（侧滑）不经过 onKeyDown、只回调 onBackPressed，必须两处都接 */
+    private boolean handleBack() {
+        if (customView != null) {   // 全屏播放中按返回 = 退全屏（页面会自动关播放页）
             exitCustomView();
             return true;
         }
-        // 返回键 = 网页后退，退无可退才退出 App
-        if (keyCode == KeyEvent.KEYCODE_BACK && web.canGoBack()) {
+        if (pageManageOn) {   // 批量管理模式开着：第一职责是退批量，不是退出 App
+            web.post(new Runnable() { @Override public void run() {
+                web.evaluateJavascript("window.__backExitManage && window.__backExitManage()", null);
+            } });
+            return true;
+        }
+        if (web.canGoBack()) {   // 返回键 = 网页后退
             web.goBack();
             return true;
         }
+        return false;
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_BACK && handleBack()) return true;
         return super.onKeyDown(keyCode, event);
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (handleBack()) return;
+        super.onBackPressed();
     }
 }

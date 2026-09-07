@@ -1138,12 +1138,17 @@ public class LocalEngine {
                 }
             }
             String videoUrl = null;
+            String coverUrl = null;   // 链接封面（v2.43）：下载后直接当视频缩略图，比抽帧好看
             long apiDurMs = 0;   // 作品真实时长（毫秒）：文件比它长出来的部分=片尾推广
             JSONObject v = item.optJSONObject("video");
             if (v != null) {
                 JSONObject pa = v.optJSONObject("play_addr");
                 JSONArray ul = pa == null ? null : pa.optJSONArray("url_list");
                 if (ul != null && ul.length() > 0 && ul.optString(0).length() > 8) videoUrl = ul.optString(0);
+                JSONObject oc = v.optJSONObject("origin_cover");
+                if (oc == null) oc = v.optJSONObject("cover");
+                JSONArray cul = oc == null ? null : oc.optJSONArray("url_list");
+                if (cul != null && cul.length() > 0 && cul.optString(0).length() > 8) coverUrl = cul.optString(0);
                 if (videoUrl == null) {
                     String uri = pa == null ? "" : pa.optString("uri", "");
                     if (uri.length() > 0) videoUrl = "https://www.iesdouyin.com/aweme/v1/play/?video_id=" + uri + "&ratio=1080p&line=0";
@@ -1189,10 +1194,43 @@ public class LocalEngine {
             postState(id, "done", rawTitle, null, new JSONArray(saved).toString());
             scanToGallery(saved);
             markOwned(saved);
-                ensureThumbs(saved);
+            // v2.43：优先把链接封面存成这个视频的缩略图（列表/详情页/模糊背景全用它）；
+            // 存不进去就照旧抽帧（ensureThumbs 见已有封面会自动跳过）
+            if (coverUrl == null || !saveCoverAsThumb(coverUrl, finalName)) ensureThumbs(saved);
             return true;
         } catch (Throwable t) {
             return false;
+        }
+    }
+
+    /** 下载链接封面写到 .thumbs/<视频名>.jpg（v2.43）。失败返回 false（调用方退回抽帧） */
+    private boolean saveCoverAsThumb(String coverUrl, String videoName) {
+        java.io.File tmp = null;
+        try {
+            File tdir = new File(vdDir, ".thumbs");
+            tdir.mkdirs();
+            File out = new File(tdir, videoName + ".jpg");
+            tmp = new File(tdir, ".cover-" + newId() + ".tmp");
+            HttpURLConnection c = (HttpURLConnection) new URL(coverUrl).openConnection();
+            c.setConnectTimeout(8000);
+            c.setReadTimeout(15000);
+            c.setInstanceFollowRedirects(true);
+            c.setRequestProperty("User-Agent", UA_ENGINE);
+            if (c.getResponseCode() != 200) { c.disconnect(); return false; }
+            InputStream ci = c.getInputStream();
+            FileOutputStream fo = new FileOutputStream(tmp);
+            byte[] buf = new byte[16384];
+            int n;
+            while ((n = ci.read(buf)) > 0) fo.write(buf, 0, n);
+            fo.close();
+            ci.close();
+            if (tmp.length() < 2048) return false;   // 太小不是真图
+            if (tmp.renameTo(out)) return true;
+            return false;
+        } catch (Throwable t) {
+            return false;
+        } finally {
+            if (tmp != null) { try { tmp.delete(); } catch (Throwable ignored) {} }
         }
     }
 

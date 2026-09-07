@@ -470,6 +470,27 @@ public class MainActivity extends Activity {
         @JavascriptInterface public String localDelete(String namesJson) { return engine.deleteFiles(namesJson); }
         /** 后台生成封面（页面随后拉 http://vd.local/thumb/<name>.jpg） */
         @JavascriptInterface public void localThumb(String name) { makeThumb(name); }
+        /** 页内播放黑屏自救（v2.39）：WebView 解不了的编码（HEVC 等）在手机上转成 H.264 mp4，
+         *  完成后回调 window.onTranscoded(新文件名, 是否成功) */
+        @JavascriptInterface public void localTranscode(final String name) {
+            if (name == null || name.contains("/") || name.contains("\\") || name.contains("..")) return;
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    String out = name;
+                    boolean ok = false;
+                    try {
+                        if (engine != null) {
+                            out = engine.transcodeToH264(name);
+                            ok = out != null && !out.equals(name);
+                        }
+                    } catch (Throwable ignored) {}
+                    final String js = "window.onTranscoded && window.onTranscoded(" + JSONObject.quote(out) + "," + ok + ")";
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() { try { web.evaluateJavascript(js, null); } catch (Throwable ignored) {} }
+                    });
+                }
+            }, "vd-transcode").start();
+        }
         /** 预热抖音访问凭证（无需登录；完成后推 window.onWarmDone） */
         @JavascriptInterface public void localWarmDouyin() { warmDouyin(); }
 

@@ -384,7 +384,7 @@
         <span class="mi c6">⚙️</span>设置<span class="mv" id="sd-short"></span><span class="arw">›</span>
       </button>
       <button class="mrow" onclick="subView('about')">
-        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.38</span><span class="arw">›</span>
+        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.39</span><span class="arw">›</span>
       </button>
     </div>
   </section>
@@ -398,7 +398,7 @@
     <div class="card" style="font-size:12.5px;color:var(--soft);line-height:2">
       纯离线单机版视频/图集下载器：抖音、B站、微博、小红书等站点的视频、图集与磁力下载，
       解析 / 下载 / 转码全部在本机完成——无服务器、不上传任何数据。<br>
-      网页 v2.38 · App 壳 v1.39（code 41）
+      网页 v2.39 · App 壳 v1.40（code 42）
     </div>
     <div class="menu" style="margin-top:12px">
       <button class="mrow" onclick="subView('src')">
@@ -1443,6 +1443,7 @@ function showPlFile() {
   window.__lastSaveAt = 0;
   noVideoBad(false);
   window.__hevcSw = 0;   // 新文件重置"有声无画"自动切换标记
+  window.__tcFrom = null;   // 新文件重置转码来源（防同一文件反复转）
   const u = fileUrl(name);
   // 单文件任务带标题就用任务标题（多文件让位给文件名，序号在第二行信息里）
   const disp = (plSet.length === 1 && window.__plTitle) ? window.__plTitle
@@ -1584,17 +1585,45 @@ function hevcCheck(delay) {
     } catch (e) {}
   }, delay);
 }
-/** 确认本页解不了画面：说明面板 + App 内自动切原生播放器（系统解码器什么都能放） */
+/** 确认本页解不了画面（HEVC 等）：页内自救——手机上转成 H.264 后原地重播。
+ *  不再自动跳全屏原生播放（体验割裂），转码失败才把面板摆出来给系统播放器兜底 */
 function hevcFail() {
   noVideoBad(true);
   if (window.__hevcSw) return;
   window.__hevcSw = 1;
-  if (IN_APP && bridgeOk('openVideo')) {
-    cue('画面编码本页解不了，已切系统解码播放', false, 2200);
-    saveProgress();
-    setTimeout(() => { try { nativeFullscreenP(); } catch (e) {} }, 850);
+  const name = plSet[plIdx];
+  if (IN_APP && name && !isImgName(name) && bridgeOk('localTranscode') && window.__tcFrom !== name) {
+    const v = document.getElementById('player-video');
+    try { v.pause(); } catch (e) {}
+    noVideoBad(false);
+    cue('这个视频的编码本页播不了，正在手机上转换格式（长视频可能要几分钟）…', true, 0);
+    window.__tcFrom = name;
+    try { AndroidBridge.localTranscode(name); return; } catch (e) {}
   }
+  if (window.__tcFrom === name) noVideoBad(true);   // 转过一次还不行：只留面板说明
 }
+// 引擎转码完成回调：换源原地重播，顺带把任务记录里的旧文件名替换掉
+window.onTranscoded = function (name, ok) {
+  cueOff();
+  if (curView !== 'player' || isImgName(curPlName)) return;
+  const old = window.__tcFrom;
+  if (ok && name && old) {
+    const i = plSet.indexOf(old);
+    if (i >= 0) plSet[i] = name;
+    localTasks.forEach(t => {
+      if (!t.files) return;
+      const j = t.files.indexOf(old);
+      if (j >= 0) { t.files[j] = name; if (t.filename === old) { t.filename = name; t.file = name; } }
+    });
+    saveLocalTasks();
+    window.__hevcSw = 0;
+    window.__tcFrom = null;
+    showPlFile();
+    cue('转换完成，继续播放', false, 1600);
+  } else {
+    noVideoBad(true);   // 转不动（极端情况）：面板上留"用系统播放器打开"
+  }
+};
 // HUD 显隐：播放中 3.5 秒自动藏；暂停/图片常显
 let hudT = null;
 function showHud() {
@@ -2322,8 +2351,75 @@ function probeTaskDur(t) {
   el.onerror = () => { clearTimeout(timer); fin(); };
   el.src = fileUrl(v);
 }
+// 首页自愈（v2.39）：①「已完成但没有文件」的记录——完成时正赶上批量并发，认领被防抢守卫
+// 拒了，之后一直没人补认领，卡片永远渲染成"进行中+取消"还点不开；现在安静下来就重新认领。
+// ② 认领只抓到一张的图集——按「基名-序号」规则把整组文件找回来（图集徽标/翻页全恢复）
+let lastHealAt = 0;
+function healDoneTasks() {
+  if (!IN_APP || !bridgeOk('localFiles') || healing) return;
+  const now = Date.now();
+  if (now - lastHealAt < 3000) return;
+  const broken = localTasks.filter(t => t.status === 'done' && !t.file);
+  const lonely = localTasks.filter(t => t.status === 'done' && t.files && t.files.length === 1
+    && !t.__gt && /^.+-\d+(\(\d+\))?\.[^.]+$/.test(t.files[0]));
+  if (!broken.length && !lonely.length) return;
+  healing = true;
+  lastHealAt = now;
+  try {
+    const files = JSON.parse(AndroidBridge.localFiles());
+    const onDisk = new Set(files.map(x => x.name));
+    const claimed = new Set(localTasks.filter(t => t.status === 'done' && t.filename).map(t => t.filename));
+    const fixTask = (t, names) => {
+      names = names.filter(n => onDisk.has(n));
+      if (!names.length) return false;
+      names.forEach(n => claimed.add(n));
+      t.files = names.slice().sort((a, b) => (parseInt((a.match(/-(\d+)/) || [0, 0])[1]) || 0) - (parseInt((b.match(/-(\d+)/) || [0, 0])[1]) || 0));
+      t.filename = t.files[0];
+      t.file = t.files[0];
+      if (!t.sizeMB) { const fi = files.find(x => x.name === t.file); if (fi) t.sizeMB = fi.sizeMB; }
+      if (!t.title || t.title === t.url) {
+        const rec = doneListRaw().find(r => r.u === t.url);
+        t.title = cleanTitle(rec && rec.t) || cleanTitle(t.file.replace(/\.[^.]+$/, ''));
+      }
+      return true;
+    };
+    for (const t of broken) {
+      // ① 同链接的下载记忆里存着当时的产出文件清单，先信它
+      const rec = doneListRaw().find(r => r.u === t.url && (r.f || []).length);
+      if (rec && fixTask(t, rec.f)) continue;
+      // ② 基名-序号整组展开（图集被认领成一张的，把全组找回来）
+      const base = (t.filename || (rec && rec.f && rec.f[0]) || '').match(/^(.+)-\d+(\(\d+\))?(\.[^.]+)$/);
+      if (base) {
+        const ext = base[3] || '';
+        const grp = files.map(x => x.name).filter(n => {
+          const m = n.match(/^(.+)-(\d+)(\(\d+\))?(\.[^.]+)$/);
+          return m && m[1] === base[1] && m[4] === ext;
+        });
+        if (grp.length > 1 && fixTask(t, grp)) continue;
+      }
+      // ③ 都没有：按 mtime 最新未认领（此时无并发任务，认领安全）
+      const free = files.find(x => !claimed.has(x.name));
+      if (free) fixTask(t, [free.name]);
+    }
+    for (const t of lonely) {   // 有文件但只有一张、名字带序号：也把整组找回来（蟒纹图集案例）
+      t.__gt = 1;
+      const base = t.files[0].match(/^(.+)-(\d+)(\(\d+\))?(\.[^.]+)$/);
+      if (!base) continue;
+      const ext = base[4] || '';
+      const grp = files.map(x => x.name).filter(n => {
+        const m = n.match(/^(.+)-(\d+)(\(\d+\))?(\.[^.]+)$/);
+        return m && m[1] === base[1] && m[4] === ext;
+      });
+      if (grp.length > 1) fixTask(t, grp);
+    }
+    saveLocalTasks();
+  } catch (e) {}
+  healing = false;
+}
+let healing = false;
 function renderLocalTasks() {
   const box = document.getElementById('list');
+  healDoneTasks();   // 自愈：无文件/单张图集的已完成记录，先补齐再渲染
   const doneN = localTasks.filter(t => t.status === 'done' && t.file).length;
   document.getElementById('home-ops').style.display = doneN ? 'flex' : 'none';
   document.getElementById('home-done-n').textContent = hManage ? ('已选 ' + homeSel.size + ' 条记录') : (doneN + ' 个已完成任务');
@@ -2348,7 +2444,9 @@ function renderLocalTasks() {
     const canLogin = loginSite && /login|登录|sign in|cookie|风控|封|429|credential|expire/i.test(t.error || '');
     const meta = t.status === 'error'
       ? `<div class="err">${esc(t.error)}</div><div class="meta"><span>${canCollect ? `<a class="dl" href="javascript:void(0)" onclick="appCollect('${t.id}')">📱 在App内采集</a>` : ''}${canLogin ? `<a class="dl" href="javascript:void(0)" onclick="startLogin('${loginSite}')">🔑 去登录</a>` : ''}<a class="dl" href="javascript:void(0)" onclick="localRetry('${t.id}')">↻ 重试</a></span><button class="del" onclick="localRemove('${t.id}')">移除</button></div>`
-      : `<div class="meta"><span class="u">${esc(t.url)}</span><button class="del" onclick="localCancel('${t.id}')">取消</button></div>`;
+      : t.status === 'done'
+        ? `<div class="meta"><span>文件不在了（可能被清理）<a class="dl" href="javascript:void(0)" onclick="localRetry('${t.id}')">↻ 重新下载</a></span><button class="del" onclick="localRemove('${t.id}')">移除</button></div>`
+        : `<div class="meta"><span class="u">${esc(t.url)}</span><button class="del" onclick="localCancel('${t.id}')">取消</button></div>`;
     return `<div class="card ${esc(t.status)}">
       <div class="row1"><div class="title" title="${esc(t.title)}">${esc(t.title)}</div><div class="status">${info}</div></div>
       <div class="bar"><div class="fill" style="width:${pct}%"></div></div>

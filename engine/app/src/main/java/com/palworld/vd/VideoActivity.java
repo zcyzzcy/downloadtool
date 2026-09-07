@@ -60,7 +60,8 @@ public class VideoActivity extends Activity {
 
     private FrameLayout root;
     private LinearLayout topBar, botBar;
-    private TextView titleV, curT, durT, cueV, playIco, spdBtn, fillBtn, prevB, nextB, cntV, spd2x, moreBtn;
+    private TextView titleV, curT, durT, cueV, spdBtn, fillBtn, prevB, nextB, cntV, spd2x, moreBtn;
+    private PlayIcon playIco;
     private PBar pbar;
 
     private final Handler h = new Handler(Looper.getMainLooper());
@@ -407,7 +408,7 @@ public class VideoActivity extends Activity {
 
     private void setPlayIco() {
         boolean playing = player != null && player.isPlaying();
-        playIco.setText(playing ? "⏸" : "▶");
+        playIco.setPlaying(playing);
     }
 
     private void setBright(float f) {
@@ -562,9 +563,36 @@ public class VideoActivity extends Activity {
         }
     }
 
+    /** 播放/暂停自绘图标：白色实心三角（播放）/ 圆角双竖条（暂停）。
+     *  不再用 ▶/⏸ 字形——部分 ROM 字体把它们渲染成彩色 emoji，画风和玻璃按钮完全不搭 */
+    private class PlayIcon extends View {
+        private boolean playing = false;
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        PlayIcon(android.content.Context c) {
+            super(c);
+            p.setColor(0xFFFFFFFF);
+            p.setStyle(Paint.Style.FILL);
+        }
+        void setPlaying(boolean pg) { if (playing != pg) { playing = pg; invalidate(); } }
+        @Override protected void onDraw(Canvas cv) {
+            float cx = getWidth() / 2f, cy = getHeight() / 2f, s = dp(8.5f);
+            if (playing) {   // 暂停：圆角双竖条
+                float bw = dp(3.4f), gap = dp(2.6f);
+                cv.drawRoundRect(cx - gap - bw, cy - s, cx - gap, cy + s, bw / 2, bw / 2, p);
+                cv.drawRoundRect(cx + gap, cy - s, cx + gap + bw, cy + s, bw / 2, bw / 2, p);
+            } else {   // 播放：实心三角（视觉重心右移一点）
+                android.graphics.Path path = new android.graphics.Path();
+                path.moveTo(cx - s * 0.7f, cy - s);
+                path.lineTo(cx - s * 0.7f, cy + s);
+                path.lineTo(cx + s, cy);
+                path.close();
+                cv.drawPath(path, p);
+            }
+        }
+    }
+
     /** 玻璃药丸按钮（底部栏：倍速/铺满） */
-    private TextView pill(String t, View.OnClickListener l) {
-        TextView v = new TextView(this);
+    private TextView pill(String t, View.OnClickListener l) {        TextView v = new TextView(this);
         v.setText(t);
         v.setTextColor(0xFFFFFFFF);
         v.setTextSize(13);
@@ -689,7 +717,19 @@ public class VideoActivity extends Activity {
         row.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams w2 = new LinearLayout.LayoutParams(-2, -2);
 
-        playIco = circle("", 19, 42, new View.OnClickListener() { @Override public void onClick(View v) { togglePlay(); } });
+        playIco = new PlayIcon(this);
+        // 播放/暂停键：自绘矢量图标（v1.40）——▶/⏸ 字形在部分 ROM 字体上会渲染成彩色 emoji，
+        // 蓝色实心圆和旁边的玻璃圆钮完全是两个画风；用 Path 画白色三角/双竖条，风格彻底统一
+        FrameLayout playBtn = new FrameLayout(this);
+        playBtn.setBackgroundResource(0);
+        GradientDrawable pg = new GradientDrawable();
+        pg.setShape(GradientDrawable.OVAL);
+        pg.setColor(0x2EFFFFFF);
+        pg.setStroke(dp(1), 0x45FFFFFF);
+        playBtn.setBackgroundDrawable(pg);
+        playBtn.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { togglePlay(); } });
+        playBtn.addView(playIco, new FrameLayout.LayoutParams(-1, -1));
+        playBtn.setLayoutParams(new LinearLayout.LayoutParams(dp(42), dp(42)));
         // 上一集/下一集用紧凑圆形图标（原来的文字药丸在窄屏+挖孔下会挤出屏幕被裁切）
         prevB = circle("‹", 20, 42, new View.OnClickListener() { @Override public void onClick(View v) { step(-1); } });
         nextB = circle("›", 20, 42, new View.OnClickListener() { @Override public void onClick(View v) { step(1); } });
@@ -704,7 +744,7 @@ public class VideoActivity extends Activity {
         spdBtn = pill("倍速 ▾", new View.OnClickListener() { @Override public void onClick(View v) { showSpeedMenu(); } });
         fillBtn = pill(fillMode ? "铺满" : "适配", new View.OnClickListener() { @Override public void onClick(View v) { toggleFill(); } });
 
-        row.addView(playIco, w2);
+        row.addView(playBtn, w2);
         LinearLayout.LayoutParams tm = new LinearLayout.LayoutParams(-2, -2);
         tm.leftMargin = dp(12);
         row.addView(curT, tm);

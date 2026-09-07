@@ -488,6 +488,22 @@ public class LocalEngine {
         return n != null && n.toLowerCase().matches(".+\\.(jpe?g|png|gif|webp|bmp|heic|heif|avif)$");
     }
 
+    /** 页内播放黑屏自救（v2.39）：把 WebView 解不了的编码（HEVC 等）转成 H.264/AAC mp4。
+     *  返回新文件名（已是万能格式则原样返回），异步调用，进度经 merging 状态静默推进 */
+    public String transcodeToH264(final String name) {
+        String out = normalizeVideo(name, "tc" + Long.toString(System.currentTimeMillis(), 36), null);
+        if (out != null && !out.equals(name)) {   // 转出来的新文件补登记，别在「我的保存」里消失
+            try {
+                ArrayList<String> one = new ArrayList<>();
+                one.add(out);
+                scanToGallery(one);
+                markOwned(one);
+                ensureThumbs(one);
+            } catch (Throwable ignored) {}
+        }
+        return out;
+    }
+
     /** 视频归一成 H.264/AAC 的 mp4。已合规原样返回名；容器不对→秒级 remux；编码不对→转码。
      *  任何失败都返回原文件名（原文件绝不删）。需要干活时先发 merging 状态（卡片显示 合并转码中…） */
     private String normalizeVideo(final String name, final String id, final String title) {

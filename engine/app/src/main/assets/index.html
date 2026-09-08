@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -201,6 +201,14 @@
   #pnov .pn-t { font-size:14.5px; font-weight:600; line-height:1.7; }
   #pnov .pn-d { font-size:12px; opacity:.72; }
   #pnov button { width:auto; padding:11px 26px; }
+  /* v2.47 视频封面态：视频不再页内解码，舞台=封面图+大播放键（点击进原生全屏播放器）。
+     播放键三角用 border 画——▶ 字形在部分 ROM 上会渲染成彩色 emoji */
+  #pcover { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); z-index:6; display:none; flex-direction:column; align-items:center; gap:11px; background:transparent; border:0; padding:10px; color:#fff; }
+  #pcover .pc-ico { width:66px; height:66px; border-radius:50%; background:rgba(18,21,30,.74); box-shadow:0 6px 24px rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; }
+  #pcover .pc-ico::after { content:''; display:block; margin-left:6px; border-left:21px solid #fff; border-top:13px solid transparent; border-bottom:13px solid transparent; }
+  #pcover .pc-tx { font-size:13px; opacity:.88; text-shadow:0 1px 5px rgba(0,0,0,.7); letter-spacing:.5px; }
+  #pstage.cover #phud, #pstage.cover #phud-top, #pstage.cover #vsl { display:none; }   /* 封面态：页内播放控件全部让位 */
+  #pstage.cover #player-img { object-fit:cover; opacity:.94; }   /* 封面铺满更像海报，播放键浮在上面 */
   /* 顶部返回 + 标题（随 HUD 显隐） */
   #phud-top { position:absolute; left:0; right:0; top:0; z-index:5; display:flex; align-items:center; gap:6px; padding:10px 12px; background:linear-gradient(rgba(0,0,0,.55), transparent); opacity:0; transition:opacity .2s; pointer-events:none; }
   #phud-top button { background:rgba(255,255,255,.14); color:#fff; border:0; border-radius:50%; width:36px; height:36px; font-size:19px; padding:0; box-shadow:none; flex:none; pointer-events:auto; }
@@ -309,7 +317,7 @@
  #gd-thumbs .gdth { flex:none; width:52px; height:52px; border-radius:8px; overflow:hidden; border:2px solid transparent; padding:0; background:#e6ebf5; cursor:pointer; }
  #gd-thumbs .gdth img { width:100%; height:100%; object-fit:cover; display:block; }
  #gd-thumbs .gdth.cur { border-color:#5b8cff; }   /* 当前那张高亮圈 */
- #gd-info { background:#fff; border-radius:14px; margin:4px 12px 10px; padding:13px 15px; box-shadow:var(--shadow); }
+  #gd-info { background:transparent; margin:2px 14px 0; padding:2px 0 11px; border-bottom:1px solid rgba(23,42,94,.07); box-shadow:none; }   /* v2.47 扁平贴合背景：去掉白卡片，只留一条极淡分隔线 */
  #gd-info-title { font-size:14.5px; font-weight:700; line-height:1.55; color:var(--text); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
  #gd-info-tags { font-size:12px; color:var(--brand-deep); opacity:.85; margin-top:5px; line-height:1.5; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
  #gd-info-meta { margin-top:8px; font-size:11.5px; color:var(--muted); }
@@ -402,7 +410,7 @@
         <span class="mi c4">🔗</span>已下载链接记忆<span class="mv" id="dlmem-n"></span><span class="arw">›</span>
       </button>
       <button class="mrow" onclick="subView('about')">
-        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.46</span><span class="arw">›</span>
+        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.47</span><span class="arw">›</span>
       </button>
     </div>
   </section>
@@ -416,7 +424,7 @@
     <div class="card" style="font-size:12.5px;color:var(--soft);line-height:2">
       纯离线单机版视频/图集下载器：抖音、B站、微博、小红书等站点的视频、图集与磁力下载，
       解析 / 下载 / 转码全部在本机完成——无服务器、不上传任何数据。<br>
-      网页 v2.46 · App 壳 v1.46（code 48）
+      网页 v2.47 · App 壳 v1.47（code 49）
     </div>
     <div class="menu" style="margin-top:12px">
       <button class="mrow" onclick="subView('src')">
@@ -645,11 +653,10 @@
     <img id="player-img" alt="图片">
     <div id="pgl"></div>
     <div id="pcue"></div>
-    <div id="pnov">
-      <div class="pn-t">这个视频的画面编码本页播不了<br>（声音正常、没有画面）</div>
-      <div class="pn-d">文件本身是完好的</div>
-      <button class="pbtn-save" onclick="openSysPlayer()">用系统播放器打开</button>
-    </div>
+    <button id="pcover" onclick="nativeFullscreenP()" aria-label="播放">
+      <span class="pc-ico"></span>
+      <span class="pc-tx">点一下全屏播放</span>
+    </button>
     <div id="vsl"><div class="vs-ico">☀️</div><div class="vs-track"><div class="vs-fill" style="height:55%"></div></div><div class="vs-num">55%</div></div>
     <div id="bar-bub">0:00</div>
     <div id="phud-top">
@@ -964,8 +971,8 @@ function clearDone() {
 
 // ---------- 任务列表（全部来自手机本地引擎） ----------
 function previewTask(id) { previewTaskAt(id, 0); }
-// v2.46：首页只有「成功/失败」两种终态——不再有"文件不在了"第三态。
-// 成功的记录（不管自愈有没有找到文件）点击直接跳「我的保存」，文件在那边看
+// v2.47：首页只有「成功/失败」两种终态。成功的记录点击直接进对应详情页
+// （视频=封面+播放的详情页 / 图集=图集详情页），不再绕道「我的保存」列表
 function homeCardClick(id) {
   if (hManage) {
     if (homeSel.has(id)) homeSel.delete(id); else homeSel.add(id);
@@ -973,14 +980,14 @@ function homeCardClick(id) {
     mgBarSync();
     return;
   }
-  const t = localTaskById(id);
-  if (t && t.status === 'done') { showView('lib'); loadLib(); return; }
+  previewTask(id);
 }
 // 多文件任务（图集/多视频）的序号小方块：直接跳到对应文件播放
 function previewTaskAt(id, idx) {
   if (hManage) { homeCardClick(id); return; }
   const t = localTaskById(id);
-  if (!t || !t.file) return;
+  if (!t) return;
+  if (!(t.files && t.files.length) && !t.filename && !t.file) return;   // 什么文件名都没有才不进详情
   const files = (t.files && t.files.length) ? t.files : [t.filename || safeName(t.file)];
   window.__plUrl = t.url || '';   // 详情页（视频/图集）的平台徽标从这里取
   openPlayerSet(files, idx, cleanTitle(t.title), t.raw);   // 带上任务标题+原始描述（标题没有就落回文件名）
@@ -994,8 +1001,8 @@ function typeBadge(t, imgs, vids) {
   return '视频' + (t && t.dur ? ' · ' + fmtDur(t.dur) : '');
 }
 // 来源平台（v2.42）：首页卡片直接复用 1318 行的 platformOf（链接→平台显示名，认不出显示域名）
-// 已完成任务行（v2.46）：只要任务成功就是这个样子（自愈在后台默默补文件对应关系，
-// 补没补上都不影响展示——点击跳「我的保存」）。纯文字：标题/#话题/平台·类型·大小；✕ 移除在右上角
+// 已完成任务行（v2.47）：只要任务成功就是这个样子（自愈在后台默默补文件对应关系，
+// 补没补上都不影响展示——点击直接进对应详情页）。纯文字：标题/#话题/平台·类型·大小；✕ 移除在右上角
 function doneRow(t) {
   const files = (t.files && t.files.length) ? t.files : (t.filename ? [t.filename] : []);
   const imgs = files.filter(isImgName);
@@ -1444,8 +1451,8 @@ function openPlayerSet(names, idx, title, raw) {
     gdOpen(imgs, Math.max(0, imgs.indexOf(name)), disp, window.__plRaw, window.__plUrl || '');
     return;
   }
-  // 视频 → 播放页=详情页：页面内直接播（v1.39 需求）。WebView 解不了的编码（HEVC 等，
-  // 表现"有声无画"）会自动检出并切原生播放器（系统解码器什么都能放）
+  // 视频 → 播放页=详情页（v2.47）：页面内不再解码视频（用户手机的 WebView 有声无画黑屏），
+  // 视频区显示封面+大播放键，点击进原生全屏播放器（系统解码器什么都能放）
   plSet = names;
   plIdx = idx;
   window.__playerFrom = curView;   // 记住来路（历史栈异常时兜底直接切回）
@@ -1493,9 +1500,6 @@ function showPlFile() {
   const name = plSet[plIdx];
   curPlName = name;
   window.__lastSaveAt = 0;
-  noVideoBad(false);
-  window.__hevcSw = 0;   // 新文件重置"有声无画"自动切换标记
-  window.__tcFrom = null;   // 新文件重置转码来源（防同一文件反复转）
   window.__srcFb = 0;   // 新文件重置"file:// 退虚拟域"标记
   const u = fileUrl(name);
   // 单文件任务带标题就用任务标题（多文件让位给文件名，序号在第二行信息里）
@@ -1528,39 +1532,23 @@ function showPlFile() {
   const v = document.getElementById('player-video'), im = document.getElementById('player-img');
   const stage = document.getElementById('pstage');
   if (isImgName(name)) {
-    v.style.display = 'none'; v.pause(); v.removeAttribute('src');
+    v.style.display = 'none'; try { v.pause(); } catch (e) {} v.removeAttribute('src');
     im.style.display = ''; im.src = u;
     stage.classList.add('hud');   // 图片：HUD（返回/翻页）常显
+    stage.classList.remove('cover');
+    document.getElementById('pcover').style.display = 'none';
   } else {
-    im.style.display = 'none'; im.src = '';
-    v.style.display = ''; v.src = u;
-    try { v.poster = localThumbUrl(name); } catch (e) {}   // 起播前先露封面（引擎后台在抽）
-    v.dataset.resume = name;             // loadedmetadata 时若有过往进度则跳过去
-    v.muted = false;                      // 用户手势链内起播，允许带声音
-    // 倍速记忆：上次选的倍速自动应用（B站行为）
-    try {
-      const sp = parseFloat(localStorage.getItem('vd_speed'));
-      if (sp > 0 && sp !== 1) { v.playbackRate = sp; document.getElementById('pspeed').textContent = sp + 'x ▾'; }
-      else { v.playbackRate = 1; document.getElementById('pspeed').textContent = '倍速 ▾'; }
-    } catch (e) {}
-    v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
-    showHud();
-    // v2.44 打开即查编码（ffprobe，确定性）：不是 h264/mpeg4 的（HEVC 等）当场转码重播，
-    // 不再赌"播放后帧数检测"——个别 ROM 的 WebView 会谎报解码帧数+画布采样也可能失灵，
-    // 那条链路永远不触发，用户就永远黑屏。这里 400ms 后兜底触发（先让视频起播拿到手势链）
-    if (IN_APP && bridgeOk('localProbe')) {
-      setTimeout(() => {
-        try {
-          if (curView !== 'player' || isImgName(curPlName) || plSet[plIdx] !== name) return;
-          window.__probeCache = window.__probeCache || {};
-          if (!(name in window.__probeCache)) window.__probeCache[name] = String(AndroidBridge.localProbe(name) || '');
-          const vc = window.__probeCache[name];
-          if (vc && vc !== 'h264' && vc !== 'mpeg4') hevcFail();
-        } catch (e) {}
-      }, 400);
-    }
-    // 不再自动进全屏：视频就在播放页内播，详情（标题/系统播放器/删除）在画面下方，
-    // 要沉浸式再点 HUD 里的 ⛶——自动全屏会把详情页闪现后整个盖掉，退出时又整页退出
+    // v2.47：视频不再在页面内解码播放。用户手机的 WebView 连续三个版本"有声无画"黑屏，
+    // 探测转码/帧数检测/画布采样的自救链在该 ROM 上全部静默失效。视频区改为
+    // 封面图 + 大播放键，点击直接进原生全屏播放器（ExoPlayer + 系统解码器，
+    // 用户已实测什么都能放）——黑屏从根上不可能再出现
+    v.style.display = 'none'; try { v.pause(); } catch (e) {} v.removeAttribute('src'); try { v.load(); } catch (e) {}
+    im.style.display = ''; im.style.opacity = ''; im.onerror = function () { this.style.opacity = 0; };   // 封面还没抽出来：黑底+播放键也成立
+    im.src = localThumbUrl(name);   // 封面图顶上（缩略图引擎下载完就在抽）
+    stage.classList.remove('hud');
+    stage.classList.add('cover');
+    document.getElementById('pcover').style.display = 'flex';
+    document.getElementById('player-toggle2').textContent = '全屏播放';
   }
   document.getElementById('pl-count').textContent = plSet.length > 1 ? (plIdx + 1) + '/' + plSet.length : '';
   applyFill();
@@ -1574,6 +1562,8 @@ function openSysPlayer() {
 }
 // ---------- 详情页操作（标题/来源复制、播暂停、删记录） ----------
 function togglePlayV2() {
+  // v2.47 封面态：页内没有视频流可暂停，这个按钮就是"进全屏播放"
+  if (document.getElementById('pstage').classList.contains('cover')) { nativeFullscreenP(); return; }
   togglePlayV();
   const v = document.getElementById('player-video');
   const b = document.getElementById('player-toggle2');
@@ -1633,96 +1623,9 @@ function showBarMark(t) {
   mk.style.display = 'block';
   setTimeout(() => { mk.style.display = 'none'; }, 5000);
 }
-/** 有声无画兜底：HEVC 等，文件没坏，本页的 WebView 解不出画面 */
-function noVideoBad(on) { const el = document.getElementById('pnov'); if (el) el.style.display = on ? 'flex' : 'none'; }
-/** 有声无画检测（v2.42 重写）：常驻轮询，三路信号任一命中就自救——
- *  ① 画面宽=0（容器里没解析出视频轨）；
- *  ② 解码帧数持续为 0（1.5 秒内都在 0 且播放时间在走）；
- *  ③ 画布采样持续全黑（有的 ROM WebView 会谎报帧数，画布像素骗不了人；
- *     跨源读不到像素时此路自动弃用，不影响前两路）。
- *  1.41 的毛病是只在上帧后单点采样一两次，条件不满足就永远不再查——用户手机上
- *  进度条一直走、什么提示都不弹就是这个漏检；这版改成播放期间一直盯着 */
-let __fr0 = null, __blk0 = null;
-const __blkCv = document.createElement('canvas'); __blkCv.width = 16; __blkCv.height = 9;
-function frameIsBlack(v) {
-  try {
-    const cx = __blkCv.getContext('2d', { willReadFrequently: true });
-    cx.drawImage(v, 0, 0, 16, 9);
-    const d = cx.getImageData(0, 0, 16, 9).data;   // 跨源污染会在这里抛 → 返回 null 弃用此路
-    let s = 0;
-    for (let i = 0; i < d.length; i += 4) s += d[i] + d[i + 1] + d[i + 2];
-    return s < 6912;   // 144 像素平均亮度 <16：解不出画面时画布就是纯黑
-  } catch (e) { return null; }
-}
-setInterval(function frameWatch() {
-  try {
-    if (curView !== 'player' || isImgName(curPlName) || !plSet.length) { __fr0 = null; __blk0 = null; return; }
-    const v = document.getElementById('player-video');
-    if (!v || v.paused || v.currentTime < 0.3 || v.readyState < 2 || v.videoWidth === 0) {
-      if (v && v.videoWidth === 0 && !v.paused && v.currentTime >= 0.3) hevcFail();   // 宽=0 直接判
-      return;
-    }
-    let frames = -1;
-    try {
-      const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
-      frames = q ? (q.totalVideoFrames || 0) : (v.webkitDecodedFrameCount || 0);
-    } catch (e) { frames = -1; }
-    if (frames === 0) {
-      if (__fr0 === null) __fr0 = { t: v.currentTime, at: Date.now() };
-      else if (Date.now() - __fr0.at >= 1500 && v.currentTime > __fr0.t + 0.4) { hevcFail(); return; }
-    } else __fr0 = null;
-    const blk = frameIsBlack(v);
-    if (blk === true) {
-      if (__blk0 === null) __blk0 = { t: v.currentTime, at: Date.now() };
-      else if (Date.now() - __blk0.at >= 2400 && v.currentTime > __blk0.t + 0.6) { hevcFail(); return; }
-    } else __blk0 = null;
-  } catch (e) {}
-}, 500);
-/** 确认本页解不了画面（HEVC 等）：页内自救——手机上转成 H.264 后原地重播。
- *  不再自动跳全屏原生播放（体验割裂），转码失败才把面板摆出来给系统播放器兜底 */
-function hevcFail() {
-  if (window.__hevcSw) { noVideoBad(true); return; }   // 这文件已自救过一轮：直接摆面板说明
-  window.__hevcSw = 1;
-  const name = plSet[plIdx];
-  if (IN_APP && name && !isImgName(name) && bridgeOk('localTranscode') && window.__tcFrom !== name) {
-    const v = document.getElementById('player-video');
-    try { v.pause(); } catch (e) {}
-    noVideoBad(false);
-    cue('这个视频的编码本页播不了，正在手机上转换格式（长视频可能要几分钟）…', true, 0);
-    window.__tcFrom = name;
-    try { AndroidBridge.localTranscode(name); return; } catch (e) {}
-  }
-  noVideoBad(true);   // 转不动（极端情况）：面板上留"用系统播放器打开"
-}
-// 引擎转码完成回调：换源原地重播，顺带把任务记录里的旧文件名替换掉。
-// v2.42：转码失败（返回的还是原文件名）不再假报"转换完成"，直接摆系统播放器面板
-window.onTranscoded = function (name, ok) {
-  cueOff();
-  if (curView !== 'player' || isImgName(curPlName)) return;
-  const old = window.__tcFrom;
-  if (ok && name && old && name !== old) {
-    const i = plSet.indexOf(old);
-    if (i >= 0) plSet[i] = name;
-    localTasks.forEach(t => {
-      if (!t.files) return;
-      const j = t.files.indexOf(old);
-      if (j >= 0) { t.files[j] = name; if (t.filename === old) { t.filename = name; t.file = name; } }
-    });
-    saveLocalTasks();
-    window.__hevcSw = 0;
-    window.__tcFrom = null;
-    if (window.__probeCache) window.__probeCache[name] = 'h264';   // 转出来的就是 h264，下次打开不再探测转码
-    showPlFile();
-    cue('转换完成，继续播放', false, 1600);
-  } else {
-    // v2.46：转码失败（手机上转码引擎跑不动/转出来的还是解不了）——不再干等黑屏，
-    // 提示一下直接切系统播放器（用户手机上系统解码器是能播的，别让黑屏再出现）
-    window.__hevcSw = 1;
-    noVideoBad(false);
-    cue('这个视频本页播不了，已切换系统播放器', false, 1600);
-    setTimeout(() => { if (curView === 'player' && plSet[plIdx] === (window.__tcFrom || curPlName)) nativeFullscreenP(); }, 900);
-  }
-};
+/** v2.47 起视频不再页内解码：黑屏自救链（帧数轮询/画布采样/hevcFail/转码重播 onTranscoded）
+ *  整体退役——用户手机的 WebView 上这条链从来没能触发（帧数谎报+采样失灵+探测为空），
+ *  连续三版"还是黑屏"。视频播放一律走原生播放器（封面+▶，见 showPlFile） */
 // HUD 显隐：播放中 3.5 秒自动藏；暂停/图片常显
 let hudT = null;
 function showHud() {
@@ -1813,7 +1716,10 @@ function nativeFullscreenP() {
   if (vi < 0) vi = 0;
   saveProgress();
   try { AndroidBridge.openVideo(JSON.stringify(vids), vi, document.getElementById('player-title').textContent || ''); }
-  catch (e) { toast('打开播放器失败：' + e.message); }
+  catch (e) {
+    // 桥异常（极端兜底）：退回 WebView 元素全屏，至少还能播
+    tryFullscreenP();
+  }
 }
 function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement; }
 // 退出全屏不再关闭播放页（老逻辑：fullscreenchange → leavePlayer，导致退全屏后被踢出播放页、详情看不到）
@@ -1851,19 +1757,8 @@ function closePlayer() { if (curView === 'player') leavePlayer(); }
   v.addEventListener('waiting', () => { if (!ppSeeking) cue('加载中…', true, 0); });
   // 原生视频全屏退出（返回键/系统按钮）= 回到播放页内继续播（详情在下方），不关播放页
   v.addEventListener('webkitendfullscreen', () => { if (curView === 'player') showHud(); });
-  // 加载失败兜底（v1.41）：file:// 在个别 ROM 的 WebView 上会被拒 → 先退回虚拟域通道重试；
-  // 两条路都失败才是真问题（编码黑屏走 playing 检测，这里走 error）
-  v.addEventListener('error', () => {
-    if (isImgName(curPlName)) return;
-    if (window.__engineDir && (v.src || '').indexOf('file://') === 0 && !window.__srcFb) {
-      window.__srcFb = 1;   // 本文件只退一次，再失败走黑屏判定
-      v.src = 'https://vd.local/file/' + encodeURIComponent(curPlName);
-      v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
-      return;
-    }
-    hevcFail();
-  });
-  v.addEventListener('playing', () => { cueOff(); });   // 黑屏检测由 v2.42 的常驻轮询接管，不再单点采样
+  // v2.47：视频不再页内解码（黑屏自救链退役），video 元素永远不挂 src，error/重试逻辑一并删除
+  v.addEventListener('playing', () => { cueOff(); });
   v.addEventListener('canplay', cueOff);
   v.addEventListener('ended', () => { // 看完：清除记忆，下次从头播
     document.getElementById('pp-toggle').classList.remove('pausing');
@@ -1886,7 +1781,7 @@ function closePlayer() { if (curView === 'player') leavePlayer(); }
     sx = t.clientX; sy = t.clientY; moved = false; mode = null;
     st = isImgName(curPlName) ? 0 : v.currentTime;
     clearTimeout(lpT);
-    if (isImgName(curPlName)) return;   // 图片：无双击/长按手势，只有滑翻页和点按
+    if (isImgName(curPlName) || document.getElementById('pstage').classList.contains('cover')) return;   // 图片/视频封面态：没有快进亮度那些手势
     lpT = setTimeout(() => {   // 长按临时 2 倍速（B站招牌手势）
       if (moved || !v.duration) return;
       mode = 'hold'; moved = true;
@@ -1895,7 +1790,7 @@ function closePlayer() { if (curView === 'player') leavePlayer(); }
     }, 480);
   }, { passive: true });
   gl.addEventListener('touchmove', e => {
-    if (isImgName(curPlName)) return;
+    if (isImgName(curPlName) || document.getElementById('pstage').classList.contains('cover')) return;
     const t = e.touches[0];
     if (mode === 'hold') return;
     const dx = t.clientX - sx, dy = t.clientY - sy;
@@ -1929,13 +1824,15 @@ function closePlayer() { if (curView === 'player') leavePlayer(); }
   }, { passive: true });
   gl.addEventListener('touchend', e => {
     clearTimeout(lpT);
-    if (isImgName(curPlName)) {   // 图片：横滑(>60px)翻页，否则点按切 HUD
+    const cover = document.getElementById('pstage').classList.contains('cover');
+    if (isImgName(curPlName) || cover) {   // 图片/视频封面态：横滑(>60px)翻页；点按=图片切HUD、封面进全屏
       const t = e.changedTouches[0];
       const dx = t.clientX - sx, dy = t.clientY - sy;
       if (plSet.length > 1 && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
         plStep(dx < 0 ? 1 : -1);
         return;
       }
+      if (cover) { nativeFullscreenP(); return; }   // 封面态点哪都是播（按钮只是视觉焦点）
       document.getElementById('pstage').classList.toggle('hud');
       return;
     }
@@ -2571,7 +2468,7 @@ function renderLocalTasks() {
     return;
   }
   box.innerHTML = localTasks.slice().reverse().map(t => {
-    if (t.status === 'done') return doneRow(t);   // v2.46：成功的任务一律正常卡片（有没有文件都跳「我的保存」）
+    if (t.status === 'done') return doneRow(t);   // v2.47：成功的任务一律正常卡片，点击进对应详情页
     const pct = t.status === 'done' ? 100 : (t.progress || 0);
     const stat = STATUS[t.status] || t.status;
     const info = stat; // 速度等数字信息在进度条下方的数字行（progLine）

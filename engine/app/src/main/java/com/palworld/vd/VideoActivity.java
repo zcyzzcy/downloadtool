@@ -671,12 +671,12 @@ public class VideoActivity extends Activity {
         root.addView(spd2x, s2);
 
         // 顶栏：返回 + 标题 + 序号 + 更多(⋮)
+        // v2.47：去掉整条顶部渐变底——那根深色横条被用户当成了"跑到顶部的进度条"
+        // （顶部拖动又会触发全屏快进手势，越拖越像）。改成浮动字形+投影，顶部不再有任何"条"
         topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
         topBar.setPadding(dp(10), dp(12), dp(14), dp(18));
-        GradientDrawable tg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{0xB3000000, 0x00000000});
-        topBar.setBackgroundDrawable(tg);
         TextView back = circle("‹", 24, 42, new View.OnClickListener() { @Override public void onClick(View v) { finish(); } });
         topBar.addView(back);
         titleV = new TextView(this);
@@ -685,12 +685,14 @@ public class VideoActivity extends Activity {
         titleV.setSingleLine(true);
         titleV.setEllipsize(android.text.TextUtils.TruncateAt.END);
         titleV.setPadding(dp(10), 0, 0, 0);
+        titleV.setShadowLayer(dp(3), 0, dp(1), 0x99000000);
         topBar.addView(titleV, new LinearLayout.LayoutParams(0, -2, 1f));
         cntV = new TextView(this);
         cntV.setTextColor(0xFFFFFFFF);
         cntV.setTextSize(12.5f);
         cntV.setPadding(dp(11), dp(5), dp(11), dp(5));
         cntV.setBackgroundDrawable(roundBg(0x33000000, 16));
+        cntV.setShadowLayer(dp(3), 0, dp(1), 0x99000000);
         topBar.addView(cntV, new LinearLayout.LayoutParams(-2, -2));
         moreBtn = circle("⋮", 20, 42, new View.OnClickListener() { @Override public void onClick(View v) { showMoreMenu(); } });
         {
@@ -722,7 +724,11 @@ public class VideoActivity extends Activity {
         playBtn.setBackgroundResource(0);
         playBtn.setOnClickListener(new View.OnClickListener() { @Override public void onClick(View v) { togglePlay(); } });
         playBtn.addView(playIco, new FrameLayout.LayoutParams(-1, -1));
-        playBtn.setLayoutParams(new LinearLayout.LayoutParams(dp(42), dp(42)));
+        // v2.47 修复（三版"进度条在顶部"的真正根因）：这里若 setLayoutParams 后又 addView(view, w2)
+        // 传入 wrap/wrap，会把 42dp 覆盖掉；playBtn 里的 PlayIcon 是 match_parent，
+        // wrap 容器一量就成了 900+px 巨块 → 按钮行撑爆 → botBar 整个全屏铺开，
+        // 进度条（botBar 第一个孩子）被顶到屏幕最顶端。必须用固定的 42dp 参数加入
+        LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(dp(42), dp(42));
         // 上一集/下一集用紧凑圆形图标（原来的文字药丸在窄屏+挖孔下会挤出屏幕被裁切）
         prevB = circle("‹", 20, 42, new View.OnClickListener() { @Override public void onClick(View v) { step(-1); } });
         nextB = circle("›", 20, 42, new View.OnClickListener() { @Override public void onClick(View v) { step(1); } });
@@ -737,7 +743,7 @@ public class VideoActivity extends Activity {
         spdBtn = pill("倍速 ▾", new View.OnClickListener() { @Override public void onClick(View v) { showSpeedMenu(); } });
         fillBtn = pill(fillMode ? "铺满" : "适配", new View.OnClickListener() { @Override public void onClick(View v) { toggleFill(); } });
 
-        row.addView(playBtn, w2);
+        row.addView(playBtn, pbLp);
         LinearLayout.LayoutParams tm = new LinearLayout.LayoutParams(-2, -2);
         tm.leftMargin = dp(12);
         row.addView(curT, tm);
@@ -851,6 +857,9 @@ public class VideoActivity extends Activity {
             @Override public boolean onScroll(MotionEvent e1, MotionEvent e2, float dx, float dy) {
                 if (e1 == null || player == null) return true;
                 int w = root.getWidth(), hg = root.getHeight();
+                // v2.47：顶部一截（返回/标题/更多那行）不作为手势起点——在那里横滑也能快进的话，
+                // 用户会愈发把顶部那行当成"在顶部的进度条"。要拖进度：底栏进度条/画面中部横滑
+                if (e1.getY() < hg * 0.14f) return true;
                 if (gmode == null) {
                     if (holding2x) {   // 长按加速中开始拖动：先恢复正常倍速，别两个手势叠加
                         holding2x = false;

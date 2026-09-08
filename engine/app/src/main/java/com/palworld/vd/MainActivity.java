@@ -570,7 +570,11 @@ public class MainActivity extends Activity {
                         File dir = engine == null ? null : engine.dir();
                         if (dir == null || name == null || name.contains("/") || name.contains("\\") || name.contains("..")) return;
                         File f = new File(dir, name);
-                        if (!f.isFile()) { videoBox.close(); return; }
+                        if (!f.isFile()) {
+                            videoBox.close();
+                            Toast.makeText(MainActivity.this, "文件不存在：" + name, Toast.LENGTH_SHORT).show();
+                            return;
+                        }
                         videoBox.open(f, startMs, title == null ? "" : title);
                         videoBox.setRect(cssToRootX(x), cssToRootY(y), cssPx(w), cssPx(h));
                     } catch (Exception ignored) {}

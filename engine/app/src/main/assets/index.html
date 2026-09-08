@@ -402,7 +402,7 @@
         <span class="mi c4">🔗</span>已下载链接记忆<span class="mv" id="dlmem-n"></span><span class="arw">›</span>
       </button>
       <button class="mrow" onclick="subView('about')">
-        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.48</span><span class="arw">›</span>
+        <span class="mi c5">ℹ️</span>关于<span class="mv">v2.49</span><span class="arw">›</span>
       </button>
     </div>
   </section>
@@ -416,7 +416,7 @@
     <div class="card" style="font-size:12.5px;color:var(--soft);line-height:2">
       纯离线单机版视频/图集下载器：抖音、B站、微博、小红书等站点的视频、图集与磁力下载，
       解析 / 下载 / 转码全部在本机完成——无服务器、不上传任何数据。<br>
-      网页 v2.48 · App 壳 v1.48（code 50）
+      网页 v2.49 · App 壳 v1.49（code 51）
     </div>
     <div class="menu" style="margin-top:12px">
       <button class="mrow" onclick="subView('src')">
@@ -1482,15 +1482,15 @@ function saveProgress() {
   writeProgress(p);
 }
 // ---------- v1.48 内嵌原生播放器桥：舞台矩形同步 + 连播 + 进度记忆 ----------
-let nvCur = null, nvPos = 0, nvDur = 0, nvState = 'idle';
+let nvCur = null, nvPos = 0, nvDur = 0, nvState = 'idle', nvFull = false;
 function nvRectSync() {
   if (!nvCur || !bridgeOk('videoRect')) return;
   const st = document.getElementById('pstage');
   if (!st) return;
   const r = st.getBoundingClientRect();
-  // 舞台滚出视口：夹到视口边缘（像吸顶的小窗），完全离屏高度为 0（播放器隐身但继续播）
-  const top = Math.max(0, r.top), bot = Math.min(window.innerHeight, r.bottom);
-  try { AndroidBridge.videoRect(r.left, top, r.width, Math.max(0, bot - top)); } catch (e) {}
+  // v1.49：矩形原样同步（top 允许为负）——播放器跟着舞台自然滚出屏幕。
+  // 1.48 把矩形夹在视口顶边、夹没了还隐身，声音继续放，看起来就是当年的"有声无画"
+  try { AndroidBridge.videoRect(r.left, r.top, r.width, r.height); } catch (e) {}
 }
 function nvOpen(name) {
   nvCur = name; nvPos = 0; nvDur = 0; nvState = 'loading';
@@ -1505,7 +1505,7 @@ function nvOpen(name) {
 function nvClose() {
   if (!nvCur) return;
   nvSave();
-  nvCur = null; nvState = 'idle';
+  nvCur = null; nvState = 'idle'; nvFull = false;
   try { AndroidBridge.videoClose(); } catch (e) {}
 }
 function nvSave() {
@@ -1516,9 +1516,9 @@ function nvSave() {
   writeProgress(p);
 }
 let nvRectT = 0;
-function scheduleNvRect() {   // 滚动/排版变化时节流同步舞台矩形
+function scheduleNvRect() {   // 滚动/排版变化：跟渲染帧同步（1.48 的 120ms 节流追不上滚动，播放器看着在页面上漂）
   if (nvRectT) return;
-  nvRectT = setTimeout(() => { nvRectT = 0; nvRectSync(); }, 120);
+  nvRectT = requestAnimationFrame(() => { nvRectT = 0; nvRectSync(); });
 }
 window.addEventListener('scroll', scheduleNvRect, { passive: true });
 window.addEventListener('resize', scheduleNvRect);
@@ -1531,6 +1531,9 @@ setInterval(function nvPoll() {
   nvState = a[0] || 'idle';
   nvPos = (parseFloat(a[1]) || 0) / 1000;
   nvDur = (parseFloat(a[2]) || 0) / 1000;
+  const f = a[3] === '1';   // 快照末尾带全屏标志：原生侧（返回键/‹/按钮）退了全屏页面也要知道
+  if (nvFull && !f) nvRectSync();   // 退全屏瞬间：立刻把播放器贴回舞台矩形
+  nvFull = f;
   if (nvState === 'error') { toast('这个视频播放不了'); nvClose(); return; }
   if (nvState === 'ended' && plSet.length > 1 && plSet[plIdx] === nvCur) plStep(1);
 }, 400);

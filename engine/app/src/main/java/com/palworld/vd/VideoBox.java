@@ -54,6 +54,9 @@ public class VideoBox extends FrameLayout {
     private long pendingResumeMs = 0;
     private long lastPosMs = 0;
     private int vw = 0, vh = 0;
+    /** 最近一次嵌入态舞台矩形：退全屏时先回到这儿，不用等页面重新容矩形过来 */
+    private int lastX = 0, lastY = 0, lastW = 0, lastH = 0;
+    private boolean hasRect = false;
     /** 页面轮询用快照（JS 桥线程直接读，不碰播放器对象） */
     private volatile String stateSnap = "idle,0,0";
 
@@ -80,6 +83,12 @@ public class VideoBox extends FrameLayout {
         sizedOnce = false;
         pendingResumeMs = Math.max(0, startMs);
         lastPosMs = Math.max(0, startMs);
+        speed = 1f;                       // 倍速不跨视频残留
+        player.setPlaybackSpeed(1f);
+        spdBtn.setText("倍速");
+        pbar.setFrac(0);
+        curT.setText("0:00");
+        durT.setText("--:--");
         player.setMediaItem(MediaItem.fromUri(android.net.Uri.fromFile(f)), 0);
         player.prepare();
         player.play();
@@ -114,8 +123,9 @@ public class VideoBox extends FrameLayout {
      *  写进布局参数才能稳定保持在舞台矩形上 */
     public void setRect(int x, int y, int w, int h) {
         if (full) return;
-        if (w < 40 || h < 40) { setVisibility(View.INVISIBLE); return; }
+        if (w < 40 || h < 40) return;   // 异常矩形直接忽略（不再隐身：1.48 隐身后声音还在，成了"有声无画"）
         setVisibility(View.VISIBLE);
+        lastX = x; lastY = y; lastW = w; lastH = h; hasRect = true;
         FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) getLayoutParams();
         lp.leftMargin = x; lp.topMargin = y; lp.width = w; lp.height = h;
         setLayoutParams(lp);
@@ -137,6 +147,7 @@ public class VideoBox extends FrameLayout {
         FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) getLayoutParams();
         lp.leftMargin = 0; lp.topMargin = 0; lp.width = -1; lp.height = -1;
         setLayoutParams(lp);
+        fullBtn.setText("退出");
         topFull.setVisibility(View.VISIBLE);
         topFull.setAlpha(1f);
         topFull.setTranslationY(0f);
@@ -157,16 +168,23 @@ public class VideoBox extends FrameLayout {
         botBar.setTranslationY(0f);
         botBar.setAlpha(1f);
         botBar.setVisibility(View.VISIBLE);
-        // 具体舞台位置由页面紧跟着的 videoRect 校正；先给个居中宽度防闪白
-        View p = (View) getParent();
+        fullBtn.setText("全屏");
+        // 直接回到最近的舞台矩形（返回键/‹ 退全屏时页面收不到通知，靠这个不闪不错位；
+        // 页面轮询到全屏标志归零后还会再容一次矩形过来校正）
         FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) getLayoutParams();
-        lp.leftMargin = 0; lp.topMargin = 0;
-        lp.width = p != null ? p.getWidth() : -1;
-        lp.height = dp(210);
+        if (hasRect) {
+            lp.leftMargin = lastX; lp.topMargin = lastY; lp.width = lastW; lp.height = lastH;
+        } else {
+            View p = (View) getParent();
+            lp.leftMargin = 0; lp.topMargin = 0;
+            lp.width = p != null ? p.getWidth() : -1;
+            lp.height = dp(210);
+        }
         setLayoutParams(lp);
     }
 
-    public String state() { return stateSnap; }
+    /** 轮询快照末尾带全屏标志："状态,位置ms,总长ms,full"——页面据此感知原生侧退了全屏 */
+    public String state() { return stateSnap + (full ? ",1" : ",0"); }
 
     private void setRequested(int o) { try { act.setRequestedOrientation(o); } catch (Exception ignored) {} }
 
@@ -184,6 +202,26 @@ public class VideoBox extends FrameLayout {
 
     // ================= 内部 =================
 
+    /** 画面按视频宽高比装进组件（留黑边），不拉伸：舞台/屏幕是 16:10 或 20:9，
+     *  抖音类竖视频是 9:16，直接铺满会把人拉宽拉瘦（1.48 的变形问题） */
+    private void fitTex() {
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) tex.getLayoutParams();
+        int W = getWidth(), H = getHeight();
+        int w, h;
+        if (W <= 0 || H <= 0 || vw <= 0 || vh <= 0) { w = -1; h = -1; }   // 画幅未知：先铺满（拿到画幅立刻重排）
+        else if ((float) vw / vh > (float) W / H) { w = W; h = Math.max(1, Math.round(W * (float) vh / vw)); }
+        else { h = H; w = Math.max(1, Math.round(H * (float) vw / vh)); }
+        if (lp.width != w || lp.height != h) {
+            lp.width = w; lp.height = h; lp.gravity = Gravity.CENTER;
+            tex.setLayoutParams(lp);
+        }
+    }
+
+    @Override protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        fitTex();   // 嵌入态贴舞台/全屏铺满，尺寸一变就按新尺寸重排画面
+    }
+
     private void buildPlayer() {
         player = new ExoPlayer.Builder(act).build();
         player.setAudioAttributes(new AudioAttributes.Builder()
@@ -192,6 +230,7 @@ public class VideoBox extends FrameLayout {
             @Override public void onVideoSizeChanged(VideoSize vs) {
                 if (vs.width > 0 && vs.height > 0) {
                     vw = vs.width; vh = vs.height;
+                    fitTex();   // 画幅到手：按宽高比重排画面（不拉伸）
                     if (full && !sizedOnce) {   // 全屏中途才拿到画幅：修正转屏方向
                         sizedOnce = true;
                         setRequested(vw >= vh ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -367,10 +406,12 @@ public class VideoBox extends FrameLayout {
     private void showHud() {
         botBar.animate().cancel();
         botBar.setAlpha(1f);
+        botBar.setTranslationY(0f);   // 藏的时候平移出去了，唤出必须复位（1.48 没复位，进度条半截出屏）
         botBar.setVisibility(View.VISIBLE);
         if (full) {
             topFull.animate().cancel();
             topFull.setAlpha(1f);
+            topFull.setTranslationY(0f);
             topFull.setVisibility(View.VISIBLE);
             h.removeCallbacks(hudHideR);
             h.postDelayed(hudHideR, 3500);

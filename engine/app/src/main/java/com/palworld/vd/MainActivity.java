@@ -46,6 +46,9 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
     private String pendingShare = null;   // 其他 App 分享进来的文本
     private LocalEngine engine;
+    // v1.48：根布局（web + 内嵌播放器两层）
+    private android.widget.FrameLayout rootLayout;
+    private VideoBox videoBox;
     // 进度推送节流：任务 id → 上次推送时刻
     private final java.util.HashMap<String, Long> progGate = new java.util.HashMap<>();
     // 视频全屏（页面点「⛶ 全屏」时由 WebChromeClient 回调）
@@ -67,7 +70,14 @@ public class MainActivity extends Activity {
             nm.createNotificationChannel(new android.app.NotificationChannel("vd", "下载完成", android.app.NotificationManager.IMPORTANCE_DEFAULT));
         }
         web = new WebView(this);
-        setContentView(web);
+        // v1.48：WebView 之上叠一层原生播放器（ExoPlayer + MediaCodec）——用户手机的 WebView
+        // 解不出 HEVC 画面（有声无画黑屏），视频画面改由原生层渲染：详情页内嵌播 + 无缝全屏，
+        // 不再跳独立播放页/系统播放器。页面通过 videoOpen/videoRect 等桥驱动
+        rootLayout = new android.widget.FrameLayout(this);
+        rootLayout.addView(web, new android.widget.FrameLayout.LayoutParams(-1, -1));
+        videoBox = new VideoBox(this);
+        rootLayout.addView(videoBox, new android.widget.FrameLayout.LayoutParams(-1, -1));
+        setContentView(rootLayout);
         // 模拟器/真机调试：debug 构建开 WebView 远程调试（chrome://inspect / CDP），release 不受影响
         if (BuildConfig.DEBUG) android.webkit.WebView.setWebContentsDebuggingEnabled(true);
 
@@ -163,7 +173,7 @@ public class MainActivity extends Activity {
                 if (customView != null) { callback.onCustomViewHidden(); return; }
                 customView = view;
                 customViewCallback = callback;
-                setContentView(view);
+                rootLayout.addView(view, new android.widget.FrameLayout.LayoutParams(-1, -1));
             }
             @Override
             public void onHideCustomView() {
@@ -537,6 +547,50 @@ public class MainActivity extends Activity {
                 }
             });
         }
+
+        // ---------- v1.48 App 内嵌播放器（详情页内嵌播 + 无缝全屏，不跳页面） ----------
+        /** CSS px → 根布局像素（WebView 在窗口里可能有偏移：挖孔/系统栏留白） */
+        private int cssToRootX(double css) {
+            int[] w = new int[2], r = new int[2];
+            web.getLocationInWindow(w); rootLayout.getLocationInWindow(r);
+            return (w[0] - r[0]) + Math.round((float) css * getResources().getDisplayMetrics().density);
+        }
+        private int cssToRootY(double css) {
+            int[] w = new int[2], r = new int[2];
+            web.getLocationInWindow(w); rootLayout.getLocationInWindow(r);
+            return (w[1] - r[1]) + Math.round((float) css * getResources().getDisplayMetrics().density);
+        }
+        private int cssPx(double css) { return Math.round((float) css * getResources().getDisplayMetrics().density); }
+
+        /** 打开视频并把播放器贴到页面舞台矩形上。startMs 续播位置；title 详情标题（全屏顶栏用） */
+        @JavascriptInterface public void videoOpen(final String name, final double x, final double y, final double w, final double h, final long startMs, final String title) {
+            runOnUiThread(new Runnable() {
+                @Override public void run() {
+                    try {
+                        File dir = engine == null ? null : engine.dir();
+                        if (dir == null || name == null || name.contains("/") || name.contains("\\") || name.contains("..")) return;
+                        File f = new File(dir, name);
+                        if (!f.isFile()) { videoBox.close(); return; }
+                        videoBox.open(f, startMs, title == null ? "" : title);
+                        videoBox.setRect(cssToRootX(x), cssToRootY(y), cssPx(w), cssPx(h));
+                    } catch (Exception ignored) {}
+                }
+            });
+        }
+        /** 页面滚动/排版变化时同步舞台矩形（播放器始终贴着详情页的视频区） */
+        @JavascriptInterface public void videoRect(final double x, final double y, final double w, final double h) {
+            runOnUiThread(new Runnable() {
+                @Override public void run() { videoBox.setRect(cssToRootX(x), cssToRootY(y), cssPx(w), cssPx(h)); }
+            });
+        }
+        @JavascriptInterface public void videoPlay() { runOnUiThread(new Runnable() { @Override public void run() { videoBox.play(); } }); }
+        @JavascriptInterface public void videoPause() { runOnUiThread(new Runnable() { @Override public void run() { videoBox.pause(); } }); }
+        @JavascriptInterface public void videoSeek(final long ms) { runOnUiThread(new Runnable() { @Override public void run() { videoBox.seekTo(ms); } }); }
+        @JavascriptInterface public void videoSpeed(final double s) { runOnUiThread(new Runnable() { @Override public void run() { videoBox.setSpeed((float) s); } }); }
+        @JavascriptInterface public void videoFull(final int on) { runOnUiThread(new Runnable() { @Override public void run() { if (on != 0) videoBox.enterFull(); else videoBox.exitFull(); } }); }
+        @JavascriptInterface public void videoClose() { runOnUiThread(new Runnable() { @Override public void run() { videoBox.close(); } }); }
+        /** 页面 400ms 轮询："playing|paused|ended|error|idle,位置ms,总长ms"（连播/进度记忆由页面管） */
+        @JavascriptInterface public String videoState() { return videoBox == null ? "idle,0,0" : videoBox.state(); }
 
         /** 目录列表（自定义保存位置用）：path 为空列存储卷（内部存储+SD卡），否则列该目录的子目录 */
         @JavascriptInterface public String listDirs(String path) {
@@ -1133,7 +1187,7 @@ public class MainActivity extends Activity {
     /** 退出全屏播放：恢复页面 + 通知内核（页面收到 fullscreenchange 后自动关闭播放页） */
     private void exitCustomView() {
         if (customView == null) return;
-        setContentView(web);
+        try { rootLayout.removeView(customView); } catch (Exception ignored) {}
         if (customViewCallback != null) {
             try { customViewCallback.onCustomViewHidden(); } catch (Exception ignored) {}
             customViewCallback = null;
@@ -1145,6 +1199,10 @@ public class MainActivity extends Activity {
      *  返回 false = 页面没消化，走系统默认（退出 App）。
      *  手势返回（侧滑）不经过 onKeyDown、只回调 onBackPressed，必须两处都接 */
     private boolean handleBack() {
+        if (videoBox != null && videoBox.isFull()) {   // 内嵌播放器全屏：返回先退全屏（不退页面）
+            videoBox.exitFull();
+            return true;
+        }
         if (customView != null) {   // 全屏播放中按返回 = 退全屏（页面会自动关播放页）
             exitCustomView();
             return true;

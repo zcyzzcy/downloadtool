@@ -1,4 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">视频下载器</string>
+    <!-- v2.00 更名：从「视频下载器」改为「百宝箱」（后续会持续加入更多功能）。
+         包名/数据键均未动 -->
+    <string name="app_name">百宝箱</string>
+    <string name="tabs_count">标签页（%1$d）</string>
+    <string name="tabs_short_count">标签 %1$d</string>
+    <string name="selected_engine">✓ %1$s</string>
+    <string name="bookmarks_count">收藏（%1$d）</string>
+    <string name="history_count">历史记录（%1$d）</string>
+    <string name="folder_fallback_help">这台手机上没有能直接打开目录的文件管理器。\n\n视频和图片的保存路径为\n%1$s\n\n可以打开系统「文件管理」进入上面的路径。图库是否显示取决于媒体索引和访问权限。</string>
+    <string name="player_initial_time">0:00</string>
+    <string name="player_speed_selected">%1$sx ▾</string>
+    <string name="player_speed_default">倍速 ▾</string>
+    <string name="player_speed_hold">▶▶ 2x</string>
+    <string name="player_speed_value">%1$sx</string>
+    <string name="zip_sort_help">包内按文件名自然排序（1、2、10 不乱序），连续重命名 01、02…；多个包按文件时间接着编。</string>
+    <string name="zip_reading_count">共 %1$d 个压缩包 · 正在读取内容…</string>
+    <string name="zip_failed_count">有 %1$d 个包读不出来</string>
+    <string name="zip_images_with_failures">共 %1$d 张图片（%2$d 个包读取失败，将被跳过）</string>
+    <string name="zip_images_total">共 %1$d 张图片</string>
+    <string name="zip_package_images">%1$d 个包 · %2$d 张</string>
+    <string name="zip_append_count">续接「%1$s」· 现有 %2$d 张</string>
+    <string name="zip_append_folder">续接「%1$s」</string>
+    <string name="selected_folder">所选文件夹</string>
+    <string name="zip_new_folder">新文件夹「%1$s」</string>
+    <string name="zip_entry_failed">%1$s（读取失败）</string>
+    <string name="zip_entry_ready">%1$s · %2$d 张</string>
+    <string name="zip_entry_reading">%1$s · 读取中…</string>
+    <string name="file_size_date">%1$s · %2$s</string>
+    <string name="image_count_updated">%1$d 张图片 · %2$s更新</string>
+    <string name="image_count_unknown_date">%1$d 张图片 · 时间未知</string>
+    <string name="zip_no_images">这些包里没有图片（支持 jpg/png/gif/bmp/webp/tif/jfif/avif）</string>
+    <string name="zip_complete">✓ 完成！新增 %1$d 张（编号 %2$d～%3$d）\n%4$s</string>
+    <string name="operation_error">出错了：%1$s</string>
+    <string name="zip_extract_progress">提取 %1$d/%2$d · %3$s</string>
+    <string name="player_speed_hold_value">长按加速 · %1$sx</string>
 </resources>

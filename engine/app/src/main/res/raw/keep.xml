@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v1.99：开启 shrinkResources 后必须保住库里运行时按名加载的资源——
+     youtubedl-android 的 YoutubeDL.kt 用 getIdentifier("ytdlp","raw") 读 zipapp（约 3MB）。
+     其余未引用资源（各 AAR 带进来的图标等）由收缩器正常移除 -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/ytdlp" />

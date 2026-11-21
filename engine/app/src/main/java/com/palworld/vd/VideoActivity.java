@@ -9,7 +9,6 @@ import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.graphics.Canvas;
 import android.graphics.Paint;
-import android.graphics.SurfaceTexture;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioManager;
@@ -56,6 +55,9 @@ public class VideoActivity extends Activity {
     private String title = "";
 
     private ExoPlayer player;
+    private MagnetStream torrentStream;
+    private boolean torrentFailureShown;
+    private TextView streamStatusV;
     private TextureView tex;
 
     private FrameLayout root;
@@ -82,9 +84,12 @@ public class VideoActivity extends Activity {
     // 手势状态
     private String gmode = null;         // seek | bright | vol（null=未锁定方向）
     private long seekBaseMs = 0, seekTargetMs = -1;
+    private float episodeDrag = 0;
     private float bright0 = 0.55f;
     private int vol0 = 0;
+    private int lastVolSet = -1;         // v1.99：音量手势去重（同档位不打 AudioService）
     private boolean holding2x = false;
+    private android.app.Dialog liveDlg;   // v1.70：当前挂着的弹窗（底部菜单/播放不了），onDestroy 统一 dismiss
     private GestureDetector gd;
 
     @Override
@@ -93,8 +98,7 @@ public class VideoActivity extends Activity {
         prefs = getSharedPreferences("vd", MODE_PRIVATE);
         am = (AudioManager) getSystemService(AUDIO_SERVICE);
         getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        try { speed = Float.parseFloat(prefs.getString("vd_speed_n", "1")); } catch (Exception e) { speed = 1f; }
-        if (speed <= 0 || speed > 4) speed = 1f;
+        speed = PlaybackMath.speed(prefs.getString("vd_speed_n", "1"));
         fillMode = "1".equals(prefs.getString("vd_fill_n", "0"));
         loop = "1".equals(prefs.getString("vd_loop_n", "0"));
         muted = "1".equals(prefs.getString("vd_mute_n", "0"));
@@ -104,8 +108,17 @@ public class VideoActivity extends Activity {
         idx = getIntent().getIntExtra("index", 0);
         title = getIntent().getStringExtra("title");
         if (files == null || files.length == 0) { finish(); return; }
+        // v1.70：数组元素可为 null/空串（Intent 不保证）——后续 new File(files[i]) / baseName()
+        // 会直接 NPE 崩溃，过滤掉再判空
+        java.util.ArrayList<String> fl = new java.util.ArrayList<>();
+        for (String f : files) if (f != null && f.trim().length() > 0) fl.add(f);
+        if (fl.isEmpty()) { finish(); return; }
+        files = fl.toArray(new String[0]);
         if (idx < 0 || idx >= files.length) idx = 0;
 
+        torrentStream = MagnetStream.get(getIntent().getStringExtra("torrentSession"));
+        if (getIntent().hasExtra("torrentSession") && torrentStream == null) { finish(); return; }
+        if (torrentStream != null) torrentStream.attach();
         buildPlayer();
         buildUi();
         immersive();
@@ -116,7 +129,10 @@ public class VideoActivity extends Activity {
     @Override protected void onDestroy() {
         super.onDestroy();
         h.removeCallbacksAndMessages(null);
+        // v1.70：挂着的弹窗（播放不了/底部菜单）先关——不 dismiss 会 WindowLeaked 并泄漏 Activity
+        if (liveDlg != null) { try { if (liveDlg.isShowing()) liveDlg.dismiss(); } catch (Exception ignored) {} liveDlg = null; }
         saveProg();
+        if (torrentStream != null) torrentStream.detach();
         if (player != null) { try { player.release(); } catch (Exception ignored) {} player = null; }
         try {
             android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
@@ -127,8 +143,19 @@ public class VideoActivity extends Activity {
 
     // ================= 播放控制 =================
 
+    @androidx.annotation.OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)
     private void buildPlayer() {
-        player = new ExoPlayer.Builder(this).build();
+        // v1.99：本地文件不需要默认 LoadControl 的 50 秒前向缓冲（高码率下白占上百 MB 配额），
+        // 15 秒足够流畅，起播/seek 反而更快（与 VideoBox 同款配置）
+        player = new ExoPlayer.Builder(this)
+            .setMediaSourceFactory(new androidx.media3.exoplayer.source.DefaultMediaSourceFactory(
+                new androidx.media3.datasource.DefaultDataSource.Factory(this,
+                    new androidx.media3.datasource.DefaultHttpDataSource.Factory()
+                        .setConnectTimeoutMs(10000).setReadTimeoutMs(torrentStream == null ? 15000 : 120000))))
+            .setLoadControl(new androidx.media3.exoplayer.DefaultLoadControl.Builder()
+                .setBufferDurationsMs(15000, 15000, 1500, 3000)
+                .build())
+            .build();
         // 音频焦点由 ExoPlayer 自己管（打断/恢复），不再手写监听
         player.setAudioAttributes(new AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true);
@@ -136,8 +163,12 @@ public class VideoActivity extends Activity {
         player.setVolume(muted ? 0f : 1f);
         player.addListener(new Player.Listener() {
             @Override public void onVideoSizeChanged(VideoSize vs) {
-                if (vs.width > 0 && vs.height > 0) { vw = vs.width; vh = vs.height; fitVideo(); }
-                if (!sizedOnce && vs.width > 0) {   // 初始方向跟随视频画幅
+                // 竖拍视频元数据带 90/270 旋转时真实画幅是换过边的（VideoBox 同款处理），
+                // 不换算的话方向判定/画面适配全反
+                int w = vs.width, hh = vs.height;
+                if (vs.unappliedRotationDegrees == 90 || vs.unappliedRotationDegrees == 270) { int t = w; w = hh; hh = t; }
+                if (w > 0 && hh > 0) { vw = w; vh = hh; fitVideo(); }
+                if (!sizedOnce && w > 0) {   // 初始方向跟随视频画幅
                     sizedOnce = true;
                     setRequestedOrientation(vw >= vh
                         ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -150,7 +181,10 @@ public class VideoActivity extends Activity {
                     cueHide();
                     long dur = durMs();
                     durT.setText(dur > 0 ? fmt(dur) : "--:--");
-                    if (pendingResumeMs > 5000 && dur > 0 && pendingResumeMs < dur - 5000) {
+                    // v1.99：play() 已经把续播位置传给 setMediaItem，正常不需要再 seek——
+                    // 只有位置真不符（>500ms）才兜底，避免每次续播白付一次解码器重初始化
+                    if (pendingResumeMs > 5000 && dur > 0 && pendingResumeMs < dur - 5000
+                        && Math.abs(player.getCurrentPosition() - pendingResumeMs) > 500) {
                         player.seekTo(pendingResumeMs);
                         cue("从上次看过的地方继续 · " + fmt(pendingResumeMs));
                     }
@@ -160,6 +194,8 @@ public class VideoActivity extends Activity {
                     h.post(tick);
                 } else if (state == Player.STATE_BUFFERING) {
                     cue("加载中…", 0);
+                    h.removeCallbacks(tick);
+                    h.post(tick);   // v1.99：暂停后 tick 已停，缓冲态也要刷新界面
                 } else if (state == Player.STATE_ENDED) {
                     clearProg();
                     if (autoNext && idx < files.length - 1) play(idx + 1);   // 连播（⋮ 菜单可关）：图集/多视频任务
@@ -173,13 +209,15 @@ public class VideoActivity extends Activity {
             }
 
             /** 失败先静默重试一次（部分 ROM 偶发解码初始化失败，第二次就能播——"明明能播放却报错"的兜底）；
-             *  重试仍失败才弹"播放不了"并给出系统播放器出路 */
+             *  重试仍失败才弹"播放不了"并给出系统播放器出路。
+             *  只对"偶发型"错误重试：文件没了/解析失败是永久性的，盲重试只会让用户多等一倍时间 */
             @Override public void onPlayerError(PlaybackException e) {
-                if (!retried) {
+                if (!retried && isRetryable(e)) {
                     retried = true;
-                    long pos = lastKnownPos;
+                    long pos = Math.max(lastKnownPos, pendingResumeMs);
+                    pendingResumeMs = 0;   // 续播位置已折进 seek，别让 READY 处理再叠一次
                     cue("重试中…", 0);
-                    player.setMediaItem(MediaItem.fromUri(Uri.fromFile(new File(files[idx]))), pos);
+                    player.setMediaItem(buildItem(idx), pos);
                     player.prepare();
                     player.play();
                     return;
@@ -189,50 +227,68 @@ public class VideoActivity extends Activity {
         });
     }
 
+    /** 解码器初始化/运行期的偶发错误值得重试；文件缺失、格式解析不了重试也没用 */
+    private static boolean isRetryable(PlaybackException e) {
+        int c = e.errorCode;
+        return c == PlaybackException.ERROR_CODE_UNSPECIFIED
+            || c == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED
+            || c == PlaybackException.ERROR_CODE_DECODING_FAILED
+            || c == PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED
+            || c == PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED;
+    }
+
     private void play(int i) {
         saveProg();
         h.removeCallbacks(tick);
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);   // v1.99：fail() 清过常亮，换集/重试恢复
         sizedOnce = false;
         idx = i;
         retried = false;
         lastKnownPos = 0;
+        holding2x = false;   // v1.70：换集时长按 2x 状态不复位（连播后倍速/角标残留）
+        if (spd2x != null) spd2x.setVisibility(View.GONE);
         String name = new File(files[i]).getName();
         String disp = (title != null && title.length() > 0 && files.length == 1)
             ? title : name.replaceAll("\\.[^.]+$", "");
         titleV.setText(disp);
-        cntV.setText(files.length > 1 ? (i + 1) + " / " + files.length : "");
+        cntV.setText(torrentStream != null ? "磁力" : files.length > 1 ? (i + 1) + " / " + files.length : "");
         int pb = files.length > 1 ? View.VISIBLE : View.GONE;
         prevB.setVisibility(pb);
         nextB.setVisibility(pb);
+        prevB.setEnabled(i > 0);
+        nextB.setEnabled(i < files.length - 1);
         pbar.setFrac(0);
         pbar.setBuf(0);
-        curT.setText("0:00");
+        curT.setText(getString(R.string.player_initial_time));
         durT.setText("--:--");
         applySpeedLabel();
-        pendingResumeMs = progMap().optInt(baseName(files[idx]), 0) * 1000L;
-        player.setMediaItem(MediaItem.fromUri(Uri.fromFile(new File(files[i]))), 0);
+        pendingResumeMs = torrentStream == null ? progMap().optInt(baseName(files[idx]), 0) * 1000L : 0;
+        // v1.99：起始位置直接传给 setMediaItem（原来固定从 0 起、READY 后再 seek——
+        // 解码器白跑一段再全量 flush 重来，续播起播延迟近乎翻倍）
+        player.setMediaItem(buildItem(i), Math.max(0, pendingResumeMs));
         if (speed != 1f) player.setPlaybackSpeed(speed);
         player.prepare();
         player.play();
         cue("加载中…", 0);
     }
 
-    private void togglePlay() {
-        if (player == null) return;
-        if (player.getPlayWhenReady()) player.pause();
-        else player.play();
+    private MediaItem buildItem(int i) {
+        if (torrentStream != null) return new MediaItem.Builder().setUri(Uri.parse(files[i])).build();
+        File vf = new File(files[i]);
+        return new MediaItem.Builder().setUri(Uri.fromFile(vf)).build();
     }
 
-    private void skip(int ms) {
+    private void togglePlay() {
         if (player == null) return;
-        long dur = durMs();
-        if (dur <= 0) return;
-        player.seekTo(Math.max(0, Math.min(dur - 200, player.getCurrentPosition() + ms)));
+        if (player.getPlayWhenReady()) { player.pause(); cueHide(); }
+        else player.play();
     }
 
     private void step(int d) {
         if (files == null || files.length < 2) return;
-        play((idx + d + files.length) % files.length);
+        int target = idx + d;
+        if (target < 0 || target >= files.length) { cue(d < 0 ? "已经是第一个视频" : "已经是最后一个视频", 1200); return; }
+        play(target);
     }
 
     // ================= 倍速 / 画面 / 菜单 =================
@@ -242,16 +298,16 @@ public class VideoActivity extends Activity {
 
     /** 手势导航条高度（弹层别被系统导航条挡住）；取不到就算 0 */
     private int navInset() {
-        try {
-            int id = getResources().getIdentifier("navigation_bar_height", "dimen", "android");
-            return id > 0 ? getResources().getDimensionPixelSize(id) : 0;
-        } catch (Throwable t) { return 0; }
+        androidx.core.view.WindowInsetsCompat insets = androidx.core.view.ViewCompat.getRootWindowInsets(getWindow().getDecorView());
+        return insets == null ? 0 : insets.getInsetsIgnoringVisibility(
+            androidx.core.view.WindowInsetsCompat.Type.navigationBars()).bottom;
     }
 
     /** App 风格底部弹层（v1.39）：白卡圆角顶 + 行式菜单，替代系统 AlertDialog——
      *  系统弹窗的样式和 App 完全不搭。states[i] 为空串则不显示右侧状态字 */
     private Dialog showSheet(String title, String[] labels, String[] states, final SheetPick pick) {
         final Dialog d = new Dialog(this);
+        liveDlg = d;   // v1.70：登记当前弹窗，onDestroy 统一 dismiss（防 WindowLeaked）
         d.requestWindowFeature(Window.FEATURE_NO_TITLE);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -371,7 +427,7 @@ public class VideoActivity extends Activity {
         muted = !muted;
         prefs.edit().putString("vd_mute_n", muted ? "1" : "0").apply();
         try { player.setVolume(muted ? 0f : 1f); } catch (Exception ignored) {}
-        cue(muted ? "🔇 静音：开" : "🔊 静音：关");
+        cue(muted ? "静音：开" : "静音：关");
         showHud();
     }
 
@@ -387,7 +443,7 @@ public class VideoActivity extends Activity {
         applySpeedLabel();
     }
 
-    private void applySpeedLabel() { spdBtn.setText((speed == 1f ? "倍速" : trimF(speed) + "x") + " ▾"); }
+    private void applySpeedLabel() { spdBtn.setText(speed == 1f ? getString(R.string.player_speed_default) : getString(R.string.player_speed_selected, trimF(speed))); }
 
     private void toggleFill() {
         fillMode = !fillMode;
@@ -411,8 +467,13 @@ public class VideoActivity extends Activity {
         playIco.setPlaying(playing);
     }
 
+    private int lastBrightPct = -1;
     private void setBright(float f) {
         try {
+            // v1.99：120Hz 触控下每个 move 事件都 setAttributes（窗口 IPC）纯浪费——取整没变就跳过
+            int pct = Math.round(Math.max(0.06f, Math.min(1f, f)) * 100);
+            if (pct == lastBrightPct) return;
+            lastBrightPct = pct;
             android.view.Window w = getWindow();
             android.view.WindowManager.LayoutParams lp = w.getAttributes();
             lp.screenBrightness = Math.max(0.06f, Math.min(1f, f));
@@ -459,7 +520,7 @@ public class VideoActivity extends Activity {
     }
 
     private void saveProg() {
-        if (player == null || files == null) return;
+        if (player == null || files == null || torrentStream != null) return;
         try {
             long pos = player.getCurrentPosition(), dur = durMs();
             JSONObject m = progMap();
@@ -471,6 +532,7 @@ public class VideoActivity extends Activity {
     }
 
     private void clearProg() {
+        if (torrentStream != null) return;
         try {
             JSONObject m = progMap();
             m.remove(baseName(files[idx]));
@@ -540,18 +602,20 @@ public class VideoActivity extends Activity {
             float x = Math.max(0f, Math.min((float) getWidth(), e.getX()));
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
+                    if (player == null || durMs() <= 0) return true;
                     scrub = true;
                     h.removeCallbacks(hideHudR);
-                    frac = clamp01(x / getWidth());
+                    frac = clamp01(x / Math.max(1, getWidth()));
                     invalidate();
                     return true;
                 case MotionEvent.ACTION_MOVE:
-                    frac = clamp01(x / getWidth());
+                    if (!scrub) return true;
+                    frac = clamp01(x / Math.max(1, getWidth()));
                     curT.setText(fmt((long) (frac * Math.max(0, durMs()))));
                     invalidate();
                     return true;
                 case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
+                    if (!scrub) return true;
                     scrub = false;
                     long dur = durMs();
                     if (player != null && dur > 0) {
@@ -559,8 +623,19 @@ public class VideoActivity extends Activity {
                     }
                     invalidate();
                     showHud();
+                    performClick();
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    scrub = false;
+                    setFrac(durMs() > 0 && player != null ? player.getCurrentPosition() / (float) durMs() : 0f);
+                    showHud();
                     return true;
             }
+            return true;
+        }
+
+        @Override public boolean performClick() {
+            super.performClick();
             return true;
         }
     }
@@ -570,6 +645,7 @@ public class VideoActivity extends Activity {
     private class PlayIcon extends View {
         private boolean playing = false;
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.Path iconPath = new android.graphics.Path();
         PlayIcon(android.content.Context c) {
             super(c);
             p.setColor(0xFFFFFFFF);
@@ -583,7 +659,8 @@ public class VideoActivity extends Activity {
                 cv.drawRoundRect(cx - gap - bw, cy - s, cx - gap, cy + s, bw / 2, bw / 2, p);
                 cv.drawRoundRect(cx + gap, cy - s, cx + gap + bw, cy + s, bw / 2, bw / 2, p);
             } else {   // 播放：实心三角（视觉重心右移一点）
-                android.graphics.Path path = new android.graphics.Path();
+                android.graphics.Path path = iconPath;
+                path.rewind();
                 path.moveTo(cx - s * 0.7f, cy - s);
                 path.lineTo(cx - s * 0.7f, cy + s);
                 path.lineTo(cx + s, cy);
@@ -660,7 +737,7 @@ public class VideoActivity extends Activity {
 
         // 长按 2 倍速角标（屏幕下方居中）
         spd2x = new TextView(this);
-        spd2x.setText("▶▶ 2x");
+        spd2x.setText(R.string.player_speed_hold);
         spd2x.setTextColor(0xFFFFFFFF);
         spd2x.setTextSize(13);
         spd2x.setPadding(dp(16), dp(7), dp(16), dp(7));
@@ -700,7 +777,23 @@ public class VideoActivity extends Activity {
             mp.leftMargin = dp(8);
             topBar.addView(moreBtn, mp);
         }
+        prevB = circle("‹", 20, 42, v -> step(-1));
+        nextB = circle("›", 20, 42, v -> step(1));
+        prevB.setContentDescription("上一个视频"); nextB.setContentDescription("下一个视频");
+        topBar.addView(prevB, 2, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        topBar.addView(nextB, 3, new LinearLayout.LayoutParams(dp(42), dp(42)));
         root.addView(topBar, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
+        if (torrentStream != null) {
+            streamStatusV = white(12);
+            streamStatusV.setPadding(dp(12), dp(6), dp(12), dp(6));
+            streamStatusV.setBackgroundDrawable(roundBg(0xA61A1D26, dp(12)));
+            streamStatusV.setSingleLine(true);
+            streamStatusV.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            FrameLayout.LayoutParams statusLp = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
+            statusLp.topMargin = dp(64); statusLp.leftMargin = dp(18); statusLp.rightMargin = dp(18);
+            root.addView(streamStatusV, statusLp);
+            cntV.setText("磁力");
+        }
 
         // 底栏：进度条 + 按钮排
         botBar = new LinearLayout(this);
@@ -710,7 +803,7 @@ public class VideoActivity extends Activity {
         botBar.setBackgroundDrawable(bg);
 
         pbar = new PBar(this);
-        botBar.addView(pbar, new LinearLayout.LayoutParams(-1, dp(36)));
+        botBar.addView(pbar, new LinearLayout.LayoutParams(-1, dp(48)));
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -730,8 +823,6 @@ public class VideoActivity extends Activity {
         // 进度条（botBar 第一个孩子）被顶到屏幕最顶端。必须用固定的 42dp 参数加入
         LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(dp(42), dp(42));
         // 上一集/下一集用紧凑圆形图标（原来的文字药丸在窄屏+挖孔下会挤出屏幕被裁切）
-        prevB = circle("‹", 20, 42, new View.OnClickListener() { @Override public void onClick(View v) { step(-1); } });
-        nextB = circle("›", 20, 42, new View.OnClickListener() { @Override public void onClick(View v) { step(1); } });
         curT = white(14);
         curT.setFontFeatureSettings("tnum");
         durT = white(14);
@@ -750,12 +841,6 @@ public class VideoActivity extends Activity {
         row.addView(slash, w2);
         row.addView(durT, w2);
         row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
-        LinearLayout.LayoutParams pm = new LinearLayout.LayoutParams(-2, -2);
-        pm.leftMargin = dp(6);
-        row.addView(prevB, pm);
-        LinearLayout.LayoutParams nm = new LinearLayout.LayoutParams(-2, -2);
-        nm.leftMargin = dp(4);
-        row.addView(nextB, nm);
         LinearLayout.LayoutParams sm = new LinearLayout.LayoutParams(-2, -2);
         sm.leftMargin = dp(10);
         row.addView(spdBtn, sm);
@@ -775,6 +860,7 @@ public class VideoActivity extends Activity {
 
     private void showHud() {
         topBar.setVisibility(View.VISIBLE);
+        if (streamStatusV != null) streamStatusV.setVisibility(View.VISIBLE);
         botBar.setVisibility(View.VISIBLE);
         topBar.animate().cancel();
         botBar.animate().cancel();
@@ -783,12 +869,13 @@ public class VideoActivity extends Activity {
         topBar.setTranslationY(0f);
         botBar.setTranslationY(0f);
         h.removeCallbacks(hideHudR);
-        h.postDelayed(hideHudR, 3500);
+        if (player != null && player.isPlaying()) h.postDelayed(hideHudR, 3500);
     }
 
     private final Runnable hideHudR = new Runnable() { @Override public void run() { hideHud(); } };
 
     private void hideHud() {
+        if (streamStatusV != null) streamStatusV.setVisibility(View.GONE);
         // v2.46：底栏（进度条+按钮）常驻不藏——之前底栏跟着 3.5 秒自动隐藏，藏掉之后画面里
         // 随便一条亮线都被当成"进度条跑到顶上去了"。现在只有顶栏自动隐藏，进度条永远在底部可见
         topBar.animate().alpha(0f).translationY(-dp(64)).setDuration(220)
@@ -821,7 +908,7 @@ public class VideoActivity extends Activity {
     private void cue(String t) { cue(t, 900); }
 
     private void cue(String t, int ms) {
-        cueV.setText(t);
+        if (!t.contentEquals(cueV.getText())) cueV.setText(t);   // v1.99：手势拖动时同一文案不再每 move 一次 setText
         cueV.setVisibility(View.VISIBLE);
         cueV.animate().cancel();
         cueV.setAlpha(1f);
@@ -850,7 +937,8 @@ public class VideoActivity extends Activity {
             @Override public void onLongPress(MotionEvent e) {
                 if (player == null || gmode != null || !player.isPlaying()) return;
                 holding2x = true;
-                try { player.setPlaybackSpeed(2f); } catch (Exception ignored) {}
+                try { player.setPlaybackSpeed(Math.max(2f, speed)); } catch (Exception ignored) {}
+                spd2x.setText(getString(R.string.player_speed_hold_value, trimF(Math.max(2f, speed))));
                 spd2x.setVisibility(View.VISIBLE);
             }
 
@@ -874,7 +962,8 @@ public class VideoActivity extends Activity {
                         seekBaseMs = safePos();
                         seekTargetMs = seekBaseMs;
                     } else if (Math.abs(tdy) > 20) {
-                        gmode = e1.getX() < w / 2f ? "bright" : "vol";
+                        gmode = files.length > 1 ? "episode" : (e1.getX() < w / 2f ? "bright" : "vol");
+                        episodeDrag = 0;
                         float b0 = getWindow().getAttributes().screenBrightness;
                         bright0 = (b0 > 0 && b0 <= 1) ? b0 : 0.55f;
                         try { vol0 = am.getStreamVolume(AudioManager.STREAM_MUSIC); } catch (Exception ignored) {}
@@ -883,24 +972,31 @@ public class VideoActivity extends Activity {
                 if ("seek".equals(gmode)) {
                     long dur = durMs();
                     if (dur <= 0) return true;
-                    // 整屏横拖 ≈ 1.0 倍时长（原 1.6 倍太快，微调容易过头）
-                    seekTargetMs = Math.max(0, Math.min(dur - 300,
-                        seekBaseMs + (long) ((e2.getX() - e1.getX()) / w * dur)));
+                    // Long videos need fine adjustment, not a whole-film jump for one swipe.
+                    seekTargetMs = PlaybackMath.swipe(seekBaseMs, dur, e2.getX() - e1.getX(), w);
                     pbar.setFrac(seekTargetMs / (float) dur);
                     curT.setText(fmt(seekTargetMs));
                     long dd = (seekTargetMs - seekBaseMs) / 1000;
                     cue((dd >= 0 ? "+" : "") + dd + "s · " + fmt(seekBaseMs) + " → " + fmt(seekTargetMs), 0);
+                } else if ("episode".equals(gmode)) {
+                    episodeDrag = e2.getY() - e1.getY();
+                    cue(episodeDrag < 0 ? "松开播放下一集" : "松开播放上一集", 0);
                 } else if ("bright".equals(gmode)) {
                     float f = Math.max(0.06f, Math.min(1f, bright0 + (e1.getY() - e2.getY()) / (hg * 0.8f)));
                     setBright(f);
-                    cue("☀️ 亮度 " + Math.round(f * 100) + "%", 0);
+                    cue("亮度 " + Math.round(f * 100) + "%", 0);
                 } else if ("vol".equals(gmode)) {
                     int max = 0;
                     try { max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC); } catch (Exception ignored) {}
                     if (max <= 0) return true;
                     float f = Math.max(0f, Math.min(1f, (vol0 + (e1.getY() - e2.getY()) / (hg * 0.8f) * max) / max));
-                    try { am.setStreamVolume(AudioManager.STREAM_MUSIC, Math.round(f * max), 0); } catch (Exception ignored) {}
-                    cue((f <= 0.001f ? "🔇" : "🔊") + " 音量 " + Math.round(f * 100) + "%", 0);
+                    // v1.99：取整后没变就别打 AudioService（每个 move 一次 binder 调用，120Hz 下每秒上百次）
+                    int vt = Math.round(f * max);
+                    if (vt != lastVolSet) {
+                        lastVolSet = vt;
+                        try { am.setStreamVolume(AudioManager.STREAM_MUSIC, vt, 0); } catch (Exception ignored) {}
+                    }
+                    cue("音量 " + Math.round(f * 100) + "%", 0);
                 }
                 return true;
             }
@@ -908,23 +1004,28 @@ public class VideoActivity extends Activity {
     }
 
     /** 手指抬起：落快进、恢复长按倍速、收提示 */
-    private void endGestures() {
+    private void endGestures(boolean commitSeek) {
         if (holding2x) {
             holding2x = false;
             spd2x.setVisibility(View.GONE);
             try { if (player != null) player.setPlaybackSpeed(speed); } catch (Exception ignored) {}
         }
-        if ("seek".equals(gmode) && seekTargetMs >= 0 && player != null) {
+        if (commitSeek && "seek".equals(gmode) && seekTargetMs >= 0 && player != null) {
             try { player.seekTo(seekTargetMs); } catch (Exception ignored) {}
-            seekTargetMs = -1;
         }
+        boolean changeEpisode = commitSeek && "episode".equals(gmode) && Math.abs(episodeDrag) > dp(64);
+        int direction = episodeDrag < 0 ? 1 : -1;
+        episodeDrag = 0;
+        seekTargetMs = -1;
         if (gmode != null) { gmode = null; cueHide(); showHud(); }
+        if (changeEpisode) step(direction);
     }
 
     @Override
     public boolean onTouchEvent(MotionEvent e) {
         if (gd != null) gd.onTouchEvent(e);
-        if (e.getActionMasked() == MotionEvent.ACTION_UP || e.getActionMasked() == MotionEvent.ACTION_CANCEL) endGestures();
+        if (e.getActionMasked() == MotionEvent.ACTION_UP || e.getActionMasked() == MotionEvent.ACTION_CANCEL)
+            endGestures(e.getActionMasked() == MotionEvent.ACTION_UP);
         return true;
     }
 
@@ -937,22 +1038,51 @@ public class VideoActivity extends Activity {
                     long pos = player.getCurrentPosition(), dur = durMs();
                     if (dur > 0) {
                         lastKnownPos = pos;
-                        pbar.setFrac(pos / (float) dur);
+                        if (!pbar.scrub && !"seek".equals(gmode)) pbar.setFrac(pos / (float) dur);
                         pbar.setBuf(Math.min(1f, player.getBufferedPosition() / (float) dur));
-                        curT.setText(fmt(pos));
+                        if (!pbar.scrub && !"seek".equals(gmode)) {
+                            String current = fmt(pos);
+                            if (!current.contentEquals(curT.getText())) curT.setText(current);
+                        }
                     }
                     setPlayIco();
-                    if (player.isPlaying() && Math.abs(pos - lastSaveMs) > 3000) { lastSaveMs = (int) pos; saveProg(); }
+                    if (torrentStream != null) {
+                        if (torrentStream.failed() && !torrentFailureShown) {
+                            torrentFailureShown = true; player.pause(); fail(null); return;
+                        }
+                        String note = torrentStream.note();
+                        if (streamStatusV != null && !note.contentEquals(streamStatusV.getText())) streamStatusV.setText(note);
+                        if (player.getPlayWhenReady() && player.getPlaybackState() == Player.STATE_BUFFERING)
+                            cue(torrentStream.failed() ? torrentStream.note() : "正在缓冲，等待已校验的视频片段…", 0);
+                    }
+                    // v1.99：3 秒→30 秒——暂停/换集/onPause/onDestroy 都有保存兜底，
+                    // 每 3 秒对越来越大的进度 map 做全量 parse+serialize+写盘纯是写放大
+                    if (player.isPlaying() && Math.abs(pos - lastSaveMs) > 30000) { lastSaveMs = (int) pos; saveProg(); }
                 } catch (Exception ignored) {}
             }
-            h.postDelayed(this, 500);
+            // v1.99：只在真播放/缓冲时重排——暂停后 2 次/秒空转唤醒纯浪费，
+            // 由 onIsPlayingChanged/READY/BUFFERING 重新拉起
+            boolean active = false;
+            try { active = player != null && (player.isPlaying() || player.getPlayWhenReady() && player.getPlaybackState() == Player.STATE_BUFFERING); } catch (Exception ignored) {}
+            if (active) h.postDelayed(this, 500);
         }
     };
 
     /** 解码真失败（重试过一次仍失败）的兜底：交给系统里能放的 App（图库/VLC 等） */
     private void fail(String errName) {
+        if (torrentStream != null) {
+            cueHide();
+            getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            liveDlg = new AlertDialog.Builder(this).setTitle("暂时无法播放")
+                .setMessage(torrentStream.failed() ? torrentStream.note() : "可能仍在等待视频片段，或当前编码不支持边下边播。下载会继续，可以稍后重试或下载完成后播放。")
+                .setPositiveButton("重试播放", (d,w) -> play(idx))
+                .setNegativeButton("返回选片", (d,w) -> finish()).setOnCancelListener(d -> finish()).show();
+            return;
+        }
         cueHide();
-        new AlertDialog.Builder(this)
+        // v1.99：播放不了还常亮屏幕白费电——失败弹窗/重试期间不需要 KEEP_SCREEN_ON
+        try { getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); } catch (Exception ignored) {}
+        liveDlg = new AlertDialog.Builder(this)   // v1.70：登记，onDestroy 统一 dismiss
             .setTitle("播放不了")
             .setMessage("这台手机的解码器放不了这个文件。\n（" + (errName == null ? "未知错误" : errName) + "）\n可以试试用其他应用打开。")
             .setPositiveButton("用其他应用打开", new android.content.DialogInterface.OnClickListener() {
@@ -1005,7 +1135,9 @@ public class VideoActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        endGestures(false);
         saveProg();
-        if (player != null && player.isPlaying()) player.pause();
+        h.removeCallbacks(tick);   // 退后台别让进度循环空转（到 onResume/READY 会重新拉起）
+        if (player != null) player.pause();
     }
 }

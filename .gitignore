@@ -30,3 +30,14 @@ __pycache__/
 # 模拟器测试遗留（本机模拟器已禁用，改真机验证；日志不入库）
 test-shots/
 emulator-test.sh
+
+# 本地开发记录、测试产物与凭据
+/build/
+/.zcode/
+/.zcodeignore
+/SecretKey.csv
+/AGENTS.md
+/_dxcg3.html
+/_gen_test.json
+/reverse/
+engine/*.bak
